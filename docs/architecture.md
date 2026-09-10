@@ -1,75 +1,120 @@
 # 구현 현황과 기술 선택
 
+이 문서는 기술 선택과 그 근거를 다룬다. 현재 기능 목록과 제한 사항은
+[CURRENT_SPEC.md](CURRENT_SPEC.md), 왜 그렇게 됐는지의 서사는
+[CHANGELOG.md](CHANGELOG.md)를 참고한다.
+
 ## 단계별 진행
 
-- 완료: Python 3.12 src 프로젝트, 설치 가능한 CLI 진입점.
-- 완료: PDF 존재 여부·페이지 수·메타데이터·첫 페이지 렌더링 검사.
-- 완료: 페이지 단위 PNG 렌더링(기본 300 DPI), 자원 해제, 임시 파일 후 교체.
-- 완료: OCR 인터페이스, 내부 데이터 모델, Tesseract TSV 어댑터, 덮어쓰기 없는 원본 JSON 저장.
-- 완료: 위치 기반 숫자형 페이지 번호 제거, 줄 연결과 기본 문단 경계 처리.
-- 완료: 캐시·재개, EPUB3 생성 및 EPUBCheck 검증, 전체 변환 CLI.
-
-현재 CLI는 `convert`와 도움말·버전을 제공한다. 기본 구현 범위는 README의 실행 안내를 참고한다.
+- 완료: CLI 기반 파이프라인(PDF → OCR → 정리 → EPUB3), 캐시·재개.
+- 완료: Tkinter GUI(파일 목록, 배치 처리, 드래그 앤 드롭, 3탭 구성).
+- 완료: PaddleOCR GPU 가속, 페이지 구간 분할 병렬 OCR.
+- 완료: 선택적 AI 보정 레이어(OpenAI/Claude/Gemini).
+- 완료: Windows 배포(포터블 exe + 온라인 설치 exe).
 
 ## 의존성
 
-2026-09-07 공식 배포 정보를 확인하고 PDF 처리에는 pypdfium2 5.x,
-PNG 저장에는 Pillow 12.x를 선택했다. 두 패키지는 Windows와 macOS용
-배포를 제공한다. 현재 Windows Python 3.12에서 설치 및 렌더링을 검증했다.
-macOS 실행 검증은 아직 하지 않았다.
+- PDF 렌더링: `pypdfium2`(Apache-2.0/BSD-3-Clause). 권장 스택의 PyMuPDF 대신 선택 —
+  대체 가능한 내부 모듈 뒤에 감춰져 있다.
+- 이미지: `Pillow`(MIT-CMU).
+- OCR 엔진 두 종류, `ocr/base.py`의 공통 인터페이스 뒤에:
+  - `Tesseract`: 최초 MVP에서 선택. Apache-2.0, 크로스플랫폼, 로컬 subprocess 실행,
+    별도 대형 프레임워크 불필요. 기본 언어 `kor+eng`, PSM 6.
+  - `PaddleOCR`(`ocr/paddle.py`): 실제 스캔본 검증 중 한글 인식률과 GPU 가속이
+    필요해 추가. 검출 `PP-OCRv5_mobile_det` + 인식 `korean_PP-OCRv5_mobile_rec`
+    조합. GPU는 NVIDIA CUDA(`paddlepaddle-gpu`)만 지원하며 CPU 대비 실측
+    약 26배 빠르다. CPU/GPU 부동소수점 차이로 결과가 미세하게 달라질 수 있어
+    `device`를 캐시 키에 포함한다.
+- 형태소 분석: `Kiwi`(LGPL-3.0, 동적 라이브러리로 분리) — 띄어쓰기·문맥 판정에 사용,
+  네트워크 없이 로컬에서 실행.
+- EPUB: Python 표준 라이브러리로 직접 생성(EbookLib 미사용, 최소 구현으로 충분).
+- 검증: `EPUBCheck`(BSD-3-Clause, Java).
+- GUI 테마: `sv-ttk`(Windows 11 스타일). PyInstaller가 `.tcl`/이미지 자산을 자동
+  인식하지 못해 `Scan2Read.spec`에 `collect_data_files('sv_ttk')`로 명시해야 한다.
 
-- pypdfium2: Apache-2.0 또는 BSD-3-Clause. 포함된 PDFium과 서드파티 고지는 배포 시 보존해야 한다.
-  https://pypi.org/project/pypdfium2/
-- Pillow: MIT-CMU. https://pypi.org/project/Pillow/
+## OCR 데이터 흐름과 캐시
 
-권장 스택의 PyMuPDF 대신 교체 가능한 PDF 모듈 내부에 pypdfium2를 사용한다.
-CLI와 테스트는 표준 라이브러리 argparse, unittest를 사용한다.
-OCR 어댑터는 Tesseract를 로컬 subprocess로 실행한다. 기본 언어는 kor+eng이다.
-Apache-2.0 라이선스, Windows/macOS 지원 및 유지되는 공식 문서를 확인했다.
-별도 Python OCR 래퍼나 대형 학습 프레임워크 없이 위치·신뢰도 정보를 얻을 수 있어 선택했다.
-공식 설치 안내: https://tesseract-ocr.github.io/tessdoc/Installation.html
-플랫폼 안내: https://tesseract-ocr.github.io/tessdoc/supported-operating-systems.html
-현재 PC의 기본 설치 경로에서 Tesseract와 kor/eng 데이터를 확인했고 실제 OCR 통합 테스트를 통과했다.
-기본 PSM 6을 사용한다. TSV와 TXT를 한 번의 OCR 실행으로 생성하고 모든 줄의 공백 외 글자가 일치할 때만 TXT의 띄어쓰기를 내부 모델에 보존한다.
+`work/<설정 SHA256>/project.json`에 원본 경로·페이지 수·DPI·엔진·상태를 기록한다.
+렌더링 결과는 `pages/`, 각 OCR 실행은 `generations/<세대>/raw_ocr/`(원본)과
+`generations/<세대>/clean/`(정리 결과)에 저장한다. AI 보정을 쓰면 같은 세대 아래
+`clean/ai_usage.json`(비용·토큰), `clean/ai_context.json`(문단 경계 판정),
+`clean/ai_enhancements.json`(그 외 보정 결과)이 추가된다.
 
-원본 JSON은 같은 경로에 재저장할 수 없다. 완성된 임시 파일을 hard link로
-게시하므로 기존 파일을 덮어쓰지 않으며, 같은 파일시스템의 hard link 지원이 필요하다.
-강제 OCR 재실행은 새 세대 디렉터리를 사용하여 기존 원본을 보존한다.
+캐시 키는 원본 PDF 해시, DPI, OCR 엔진과 언어 모델 해시, PSM, `text_layer` 모드,
+GPU 사용 여부로 결정된다. **페이지 범위는 캐시 키에 포함하지 않는다** — 그래서
+`scan2read ocr-pages`로 겹치지 않는 페이지 구간을 여러 프로세스가 동시에 채워도
+안전하고, 이후 전체 범위로 `convert`를 실행하면 그 캐시를 그대로 재사용해 OCR
+없이 EPUB만 조립한다. GUI의 청크 스케줄러(`gui.py`)가 "동시 처리 개수" 설정만큼
+`ocr-pages` 프로세스를 병렬로 띄우고, 모든 구간이 끝나면 `convert`를 한 번 더
+호출해 EPUB을 마무리하는 방식이 이 캐시 설계 위에서 동작한다.
 
-## 개발 실행
+강제 재실행(`--force`)은 새 세대 디렉터리를 써서 기존 원본을 보존한다.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -e .
-.\.venv\Scripts\python -m scan2read --help
-.\.venv\Scripts\python -m unittest discover -s tests -v
-```
+## AI 보정 레이어
 
-원본 OCR, 정리 텍스트, TTS 텍스트는 별도 단계로 유지한다.
-현재 테스트는 합성 PDF만 사용하며 외부로 문서를 전송하지 않는다.
+`cleanup/ai_*.py`가 로컬 판정을 보강하는 선택적 레이어를 이룬다.
 
+- `ai_providers.py`: OpenAI/Anthropic/Google 클라이언트와 모델별 요금표(`MODELS`).
+  제공자별 기본값은 플래그십이 아니라 저비용·균형 모델. 실측 결과 비용 대비
+  효과가 낮은 모델(GPT-6 Astra, GPT-5.6 Sol)은 목록에서 제외했다.
+- `ai_filter.py`: 문단을 AI로 보낼지 로컬에서 걸러 비용을 줄인다.
+- `ai_enhance.py`: `AIOptions` 데이터클래스 필드 하나가 기능 하나(문단 경계, OCR
+  의심 단어, 띄어쓰기, 이상 문자, 구조 분류, 목차, 괄호·음역 삭제)에 대응한다.
+  각 필드는 JSON 스키마 속성 + 프롬프트 문구 + 검증된 적용 메서드로 연결된다.
+  응답은 항상 원문을 다시 쓰지 않고 구조화된 판정만 반환하도록 강제하며, 적용
+  전 안전장치(정확히 한 번만 등장, 문단 길이 대비 비율 제한 등)를 통과해야 한다.
+- `ai_cache.py`: 문단·모델·기능 조합을 여러 책·재실행에 걸쳐 캐시.
+- `ai_usage.py`: 변환 전 예상 비용과 변환 중 실제 비용·진행률 계산.
 
-## 현재 저장 구조
+오류 처리는 두 단계로 나뉜다 — 응답이 파싱 불가능하거나 스키마를 벗어나면 그
+묶음만 로컬 판정으로 넘어가고 다음 묶음은 다시 시도한다. 연결 자체가 끊기면
+(`OSError`) 그 책의 나머지 전체가 로컬 처리로 전환된다. Raw OCR과 PDF/페이지
+이미지는 어떤 경우에도 외부로 전송하지 않는다.
 
-`work/<설정 SHA256>/project.json`에 원본 경로·페이지 수·DPI·상태·세대를 기록한다.
-렌더링 결과는 `pages/`, 각 OCR 실행 세대는 `generations/<세대>/raw_ocr/`와
-`generations/<세대>/clean/`에 저장한다. TTS 전용 변환은 아직 추가하지 않았다.
-OCR 캐시 키에는 원본 PDF 해시, DPI, 실행 파일·언어 모델 해시와 PSM을 포함한다.
+## GUI와 배치 처리
 
-## EPUB 구현과 검증
+Tkinter 기반, `TkinterDnD`로 드래그 앤 드롭을 지원한다(`gui.py`). 화면은 "변환"
+(파일 목록·시작/중단·로그) · "변환 설정"(출력·이름 규칙·보정 옵션·GPU·동시 처리
+개수) · "AI 설정"(제공자·모델·키·기능·비용) 3탭으로 나뉜다.
 
-단일 XHTML 본문과 EPUB3 navigation/package/container를 Python 표준 라이브러리로
-생성한다. 최소 출력이므로 EbookLib를 추가하지 않았다. 본문은 페이지별로 처리하고
-ZIP 멤버에 순차 기록한다. HTML/XML 특수문자는 이스케이프한다.
-기본 메타데이터는 title, ko 언어, UUID, 수정 시각이다.
-표지·저자·ISBN 옵션은 아직 구현하지 않았다.
+배치 처리는 `self.job_queue`(파일별 OCR 청크 + finalize 잡)와 `self.active`(현재
+실행 중인 서브프로세스)로 이뤄진 슬롯 기반 스케줄러다. 동시 처리 개수만큼 슬롯을
+채우고, 한 파일의 모든 OCR 청크가 끝나면 그 파일의 finalize(`convert`) 잡을 큐
+앞에 넣는다. 진행률은 청크별 최신 페이지 번호를 합산해 계산한다. 취소 시 활성
+프로세스에 `terminate()`를 보내고, 마지막 활성 잡이 끝난 뒤에야 남은 대기열을
+파일 단위로 취소 처리한다.
 
-빠른 ZIP/XML 검사 후 로컬 EPUBCheck를 필수 실행한다. 성공한 경우만 최종 경로로
-교체한다. EPUBCheck 5.3.0은 W3C/DAISY가 관리하는 BSD-3-Clause Java 도구이며
-Windows/macOS의 Java 환경에서 실행 가능하다.
-https://github.com/w3c/epubcheck
+## HiDPI와 테마
 
-2026-09-07 Windows 검증: 한국어 합성 스캔 2페이지 변환, 본문 정확 일치,
-페이지 번호 제거, EPUBCheck 오류·경고 0건, 재실행 OCR 캐시 확인.
-자동 테스트 21개(실제 OCR 및 EPUBCheck 통합 포함) 통과.
-모바일 리더와 장시간 TTS 청취 및 macOS 실행은 아직 검증하지 않았다.
+`dpi_scale()`이 `SetProcessDpiAwareness`로 DPI 인식을 켜고 실제 배율을 읽는다.
+글꼴 등 점 단위 값은 Tk의 `tk scaling`으로, 창 크기·Treeview 폭 같은 픽셀 리터럴은
+`Application._px()`로 각각 배율을 곱한다. `sv_ttk.set_theme()` 적용 직후 8개
+Sun Valley 명명 폰트를 맑은 고딕으로 재설정한다(원래 폰트가 이 PC의 한글 폴백에
+실패해서 생긴 조치).
+
+## 패키징과 배포
+
+`Scan2Read.spec`(PyInstaller)이 `scripts/gui_launcher.py`를 진입점으로 GUI 전체를
+freeze한다. **`gui.py`가 임포트하는 모든 코드는 exe의 PYZ 안에 그대로 박제되므로**,
+그 코드가 바뀌면 `app/scan2read`로의 단순 복사가 아니라 반드시 전체 재빌드가
+필요하다. CLI 서브프로세스(`ocr-pages`/`convert`)만 `app/scan2read`의 소스를
+그대로 읽는다.
+
+배포는 두 가지다.
+
+- 포터블(`dist/Scan2Read`): 개발/검증용, PaddleOCR·Kiwi 등을 전부 포함.
+- 온라인 설치(`Scan2Read-Setup.exe`, `Scan2Read-Setup.spec`): 작은 exe(약 120MB)만
+  배포하고, 설치 중 `scripts/windows_installer.py`가 CPU용 PaddleOCR·Kiwi·한국어
+  모델(약 250MB)을 내려받는다. 관리자 권한 없이 사용자 폴더에 설치되며, 시작
+  메뉴 바로가기와 "프로그램 및 기능" 제거 항목을 등록한다. GPU 가속(CUDA, 약 2GB)은
+  설치 후 GUI에서 별도로 선택할 때만 받는다.
+
+Windows 개발/빌드 환경 세부 사항(2026-09-07 검증 내용)은 다음과 같다.
+
+- pypdfium2 5.x, Pillow 12.x를 Windows Python 3.12에서 설치·렌더링 검증했다.
+  macOS 실행은 검증하지 않았다.
+- 원본 JSON은 완성된 임시 파일을 hard link로 게시해 기존 파일을 덮어쓰지 않는다
+  (같은 파일시스템의 hard link 지원 필요).
+- EPUB은 페이지별로 처리해 ZIP 멤버에 순차 기록하고, HTML/XML 특수문자를
+  이스케이프한다. 최소 메타데이터(title, ko 언어, UUID, 수정 시각)만 채운다.
+  표지·저자·ISBN은 아직 없다.

@@ -531,6 +531,17 @@ CLI 서브프로세스 전용). `gui.py`뿐 아니라 `cleanup/` 등 GUI가 임�
 GUI 실행 파일을 다시 만들 때는 `docs/CHANGELOG.md`의 `Process notes for whoever builds next`를
 먼저 확인하고, 실행 중인 `Scan2Read.exe`를 임의로 종료하지 않는다.
 
+## 배포 상태
+
+2026-09-10에 저장소를 GitHub(`github.com/hahadark/scan2read`, 현재 비공개)에
+올렸다. 사용자용 문서를 개발 스펙과 분리했다(`README.md`, `docs/INSTALL.md`,
+`docs/WINDOWS.md`). 최신 소스(HiDPI, sv-ttk+맑은 고딕, 괄호·음역 삭제 포함) 기준으로
+다시 빌드한 `Scan2Read-Setup.exe`를 Release `v0.1.0`에 올렸다 — `scripts/stage_windows.py
+--online` → `Scan2Read-Setup.spec` 순서로 재빌드했고, `build/installer/Scan2Read-Setup.exe`가
+그 결과물이다. `--test-install`로 헤드리스 설치 스모크 테스트를 시도했으나
+`console=False`(창 없는 exe)라 CLI 인자 경로의 성공/실패를 콘솔에서 확인할 수
+없었다 — 실제 설치 과정은 아직 사람이 클릭해서 검증하지 않았다.
+
 ## 주요 제한
 
 - AI 보정은 현재 느리며 특히 모든 기능과 AI 띄어쓰기를 함께 켠 긴 책에서 두드러진다.

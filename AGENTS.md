@@ -28,6 +28,11 @@ Never overwrite Raw OCR. Never modify Clean Text solely for TTS pronunciation pu
 
 ## Development Priority
 
+**Status: done.** This ordering governed the initial build; the CLI
+pipeline, GUI, and optional AI layer are all implemented now. Kept here
+because the ordering rationale (don't build UI on top of an unproven
+pipeline) still applies to any future ground-up addition.
+
 Implement the core processing pipeline before GUI development.
 
 Priority order:
@@ -77,14 +82,19 @@ Avoid giant modules, hidden global state, tightly coupling OCR to EPUB creation,
 
 ## Module Boundaries
 
-- `pdf`: PDF inspection and page rendering
-- `image`: image preprocessing
-- `ocr`: OCR engine abstraction and OCR execution
-- `document`: intermediate document representation and reading order
-- `cleanup`: text cleanup and document reconstruction
-- `tts`: TTS-only transformations
+As actually implemented (some planned modules below were never split out --
+see [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for the real current tree):
+
+- `pdf`: PDF inspection, page rendering, text-layer reuse, GPU-mode prefetch
+- `ocr`: OCR engine abstraction, Paddle/Tesseract adapters, GPU detection
+- `cleanup`: text cleanup, document reconstruction, and the optional AI
+  cleanup layer (`ai_providers.py`, `ai_enhance.py`, `ai_filter.py`,
+  `ai_cache.py`, `ai_usage.py`). TTS-only transformations live here too
+  (`parentheses.py`) rather than in a separate `tts` module.
 - `epub`: EPUB3 generation and validation
-- `project`: caching, manifests, checkpoints, and resume state
+- `project`: caching, manifests, resume state, GUI preferences, and
+  encrypted API-key storage
+- `gui.py`, `pipeline.py`, `cli.py`: top-level, not nested under a module
 
 ## OCR Engine
 
@@ -206,22 +216,23 @@ Never automatically upload source PDFs, rendered pages, or images of book pages 
 
 ## CLI
 
-Initial target:
+Initial target (implemented):
 
 ```bash
 scan2read convert book.pdf
 ```
 
-Useful future subcommands:
+Actually-implemented subcommands beyond the initial target (the
+`init`/`render`/`ocr`/`clean`/`build`/`validate`/`status` split originally
+sketched here was never built -- these turned out to be what was actually
+needed):
 
 ```bash
-scan2read init book.pdf
-scan2read render PROJECT
-scan2read ocr PROJECT
-scan2read clean PROJECT
-scan2read build PROJECT
-scan2read validate PROJECT
-scan2read status PROJECT
+scan2read inspect book.pdf      # page count / text-layer coverage, no conversion
+scan2read ocr-pages FILE --pages A-B ...   # OCR one page range into the cache, no EPUB
+scan2read gpu-status            # NVIDIA GPU detection + CUDA build install state
+scan2read gpu-install           # install the CUDA paddlepaddle build
+scan2read gpu-usage             # one-shot nvidia-smi utilization/VRAM as JSON
 ```
 
 ## Git Discipline

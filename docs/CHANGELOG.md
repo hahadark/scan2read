@@ -15,6 +15,81 @@ picks this project up next. Feature-level usage docs live in
 narrative of *how* things got to their current state, including real-book
 findings and rejected approaches, which those reference docs don't carry.
 
+## 2026-09-10
+
+### Published to GitHub, docs split into user-facing vs. developer-facing
+
+User said the app "seems basically done" and asked, first, how to make it
+run on the web -- explored a client-side (browser-does-the-OCR) angle,
+prototyped Tesseract.js against a real page (Korean-only lines were fine,
+mixed Korean/English footnote lines were badly mangled -- unusable for this
+book's actual footnote-heavy content), then found a community ONNX export
+of the exact same `korean_PP-OCRv5_mobile_rec` model on Hugging Face
+(`monkt/paddleocr-onnx`) and ran it through `onnxruntime-web` in-browser
+against the same lines: output matched the production PaddleOCR result
+almost exactly, ~150ms/line. Confirmed the idea is technically viable but
+parked it (detection-side reimplementation in JS still open) when the user
+redirected to publishing instead.
+
+Then: wrote a short-form promo post for the app, then asked to publish the
+repo to GitHub.
+
+- `git init`, `.gitignore` extended to also exclude root-level source PDFs/
+  EPUBs (a 621MB copyrighted book and a `.pending.epub` were sitting in the
+  project root) and `.claude/`. Scanned the staged diff for API-key-shaped
+  strings before the first commit -- none found; credentials live outside
+  the repo in Windows-encrypted storage already.
+- Created `github.com/hahadark/scan2read` (private) via `gh`, after
+  confirming which of the two logged-in `gh` accounts to use and that the
+  user wanted it private for now.
+- The README was still the original internal planning/spec document (MVP
+  scope, roadmap phases, a "no GUI in phase 1" line that's long since
+  false) -- not something a downloader could act on. Rewrote it as a short
+  pitch + download link + 4-step usage summary + developer section
+  pointing at the docs that still carry the original spec content
+  (`CURRENT_SPEC.md`, `CODEX_FIRST_PROMPT.md`, `architecture.md`). Added
+  `docs/INSTALL.md` (SmartScreen warning, install steps, GPU setup,
+  uninstall, troubleshooting) since none of that existed anywhere before.
+- User then asked where the usage doc was, then asked for it to be trimmed
+  ("텍스트가 너무 많아") -- `WINDOWS.md` was dense unbroken paragraphs
+  repeating the same caveats several times (GPU-is-NVIDIA-only alone
+  appeared three times). Restructured around headers and one bullet per
+  point, cut duplication with INSTALL.md/README's license section instead
+  of repeating it, 92 lines to 56.
+- Rebuilt the installer from current source: the existing
+  `build/installer/Scan2Read-Setup.exe` predated the HiDPI/sv-ttk/glosses
+  work by about 14 hours (same PYZ-freezing rule as `gui.py` -- the
+  installer's payload is a zip of the portable app, so it goes stale the
+  same way). `scripts/stage_windows.py --online` restaged
+  `build/payload-online.zip` from the already-current `dist/Scan2Read`,
+  then `PyInstaller Scan2Read-Setup.spec` rebuilt the setup exe (~128MB).
+  Attempted a headless smoke test via `--test-install`/`--skip-download`,
+  but the installer is a `console=False` windowed exe so its argparse
+  path produces no visible output or exit signal to check against --
+  reported this gap honestly rather than claiming it was verified.
+- Published `v0.1.0` on GitHub Releases with the rebuilt installer and its
+  SHA256, since a private repo's file listing isn't a real distribution
+  channel for a 128MB binary and this is what Releases exists for.
+- Asked whether to flip the repo to public now that everything was ready;
+  user chose to keep it private for the moment.
+- User then asked whether *every* doc had been brought current. Audited
+  the rest: `roadmap.md` hadn't been touched since 2026-09-08 and its
+  closing line claimed AI support was *excluded* from scope, which was
+  true when written but has been false since the AI cleanup layer shipped
+  the next day. `architecture.md` still described the pre-GUI,
+  pre-PaddleOCR, pre-AI CLI-only MVP with no mention of any OCR engine but
+  Tesseract. `PROJECT_STRUCTURE.md` listed a `config`/`document`/`tts`/
+  `image`/`utils` module layout that was never built. `AGENTS.md`'s CLI
+  section still listed the originally-sketched `init`/`render`/`ocr`/
+  `clean`/`build`/`validate`/`status` subcommands instead of the ones that
+  actually exist (`inspect`, `ocr-pages`, `gpu-status`, `gpu-install`,
+  `gpu-usage`). Updated all four. Left `CODEX_FIRST_PROMPT.md` and the
+  `*-trial.md`/`gpu-prefetch-benchmark.md` files alone on purpose -- they
+  are point-in-time historical records (the literal original kickoff
+  prompt; snapshots of one specific experiment's results) and rewriting
+  them to reflect current state would destroy the thing that makes them
+  useful.
+
 ## 2026-09-09
 
 ### HiDPI support
