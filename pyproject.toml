@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scan2read"
+version = "0.1.0"
+description = "Local scanned Korean PDF to listening-friendly EPUB3"
+requires-python = ">=3.12"
+dependencies = ["pypdfium2>=5,<6", "Pillow>=12,<13", "tkinterdnd2>=0.4,<1", "sv-ttk>=2.6,<3"]
+
+[project.scripts]
+scan2read = "scan2read.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

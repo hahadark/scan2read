@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+work/
+output/
+.tools/
+.pytest_cache/
+*.pyc
+.claude/
+
+# Source PDFs and generated EPUBs dropped in the project root while testing
+# (the actual books people convert -- never belong in the repo).
+/*.pdf
+/*.epub
+*.pending.epub
