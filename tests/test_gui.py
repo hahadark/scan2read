@@ -275,10 +275,20 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(command[command.index('--ai-cost-limit-usd')+1],'0.75')
         for flag in ('--ai-ocr-words','--ai-spacing','--ai-anomalies','--ai-structure','--ai-headings','--ai-glosses'):
             self.assertIn(flag,command)
+        self.assertNotIn('--ai-figures',command)  # left off above, so it must not appear
         self.assertNotIn('sk-test-secret',command)
         self.assertEqual(environment['OPENAI_API_KEY'],'sk-test-secret')
         saved=json.loads(self.settings_path.read_text(encoding='utf-8'))
         self.assertNotIn('api_key',saved)
+        self.app.active={};self.app.in_batch=False
+
+    def test_figures_checkbox_adds_its_flag(self):
+        self.add('a.pdf')
+        self.app.use_ai_context.set(True);self.app.ai_figures.set(True)
+        with patch('scan2read.gui.subprocess.Popen',return_value=Mock(stdout=iter([]))) as popen:
+            self.app.start()
+            command=popen.call_args.args[0]
+        self.assertIn('--ai-figures',command)
         self.app.active={};self.app.in_batch=False
 
     def test_custom_rule_is_passed_only_when_set_and_ai_is_on(self):

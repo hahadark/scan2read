@@ -311,7 +311,8 @@ class Application:
         feature_values=[("문단 경계 검사",self.ai_boundary),("OCR 의심 단어 보정",self.ai_ocr_words),
                         ("띄어쓰기 AI 재검사",self.ai_spacing),("이상한 글자 탐지",self.ai_anomalies),
                         ("제목·본문·각주 분류",self.ai_structure),("장·절 구조 및 목차 감지",self.ai_headings),
-                        ("괄호·음역 중복 표현 삭제",self.ai_glosses)]
+                        ("괄호·음역 중복 표현 삭제",self.ai_glosses),
+                        ("도식·그림 잔재 삭제",self.ai_figures)]
         for index,(title,var) in enumerate(feature_values):
             feature=ttk.Checkbutton(features,text=title,variable=var)
             feature.grid(row=index//3,column=index%3,sticky="w",padx=(0,18),pady=2)
@@ -502,7 +503,7 @@ class Application:
         values=(("boundary",self.ai_boundary),("ocr_words",self.ai_ocr_words),
                 ("spacing",self.ai_spacing),("anomalies",self.ai_anomalies),
                 ("structure",self.ai_structure),("headings",self.ai_headings),
-                ("glosses",self.ai_glosses))
+                ("glosses",self.ai_glosses),("figures",self.ai_figures))
         return [name for name,variable in values if variable.get()]
 
     def _page_count_for_estimate(self,total):
@@ -769,7 +770,8 @@ class Application:
             for enabled,flag in [(self.ai_boundary.get(),"--ai-context"),
                 (self.ai_ocr_words.get(),"--ai-ocr-words"),(self.ai_spacing.get(),"--ai-spacing"),
                 (self.ai_anomalies.get(),"--ai-anomalies"),(self.ai_structure.get(),"--ai-structure"),
-                (self.ai_headings.get(),"--ai-headings"),(self.ai_glosses.get(),"--ai-glosses")]:
+                (self.ai_headings.get(),"--ai-headings"),(self.ai_glosses.get(),"--ai-glosses"),
+                (self.ai_figures.get(),"--ai-figures")]:
                 if enabled:command.append(flag)
             command+=["--ai-provider",self.ai_provider.get(),"--ai-model",self.ai_model.get()]
             rule=self.ai_custom_rule.get().strip()

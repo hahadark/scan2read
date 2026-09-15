@@ -83,6 +83,34 @@ class AIEnhanceTests(unittest.TestCase):
         self.assertEqual(result[0]["text"],"정의(체다카)와 정의(체다카)는 같다.")
         self.assertEqual(enhancer.audit_records[0]["removed_glosses"],[])
 
+    def test_figure_residue_drops_the_paragraph_from_the_epub_but_keeps_the_audit(self):
+        def transport(payload):
+            identifier=json.loads(payload["input"])[0]["id"]
+            return response([{"id":identifier,"figure_residue":True}])
+        enhancer=AIEnhancer(provider(transport),AIOptions(figures=True))
+        result=enhancer.enhance([{"text":"T ←","kind":"body"}])
+        self.assertEqual(result[0]["text"],"")
+        self.assertEqual(enhancer.audit_records[0]["before"],"T ←")
+        self.assertTrue(enhancer.audit_records[0]["dropped_figure_residue"])
+
+    def test_figure_residue_is_refused_on_anything_that_reads_as_real_text(self):
+        def transport(payload):
+            identifier=json.loads(payload["input"])[0]["id"]
+            return response([{"id":identifier,"figure_residue":True}])
+        for text in ("리더십은 저절로 성장하지 않는다","그렇다.","진재혁 목사의 강연 내용을 정리한 것이다"):
+            with self.subTest(text=text):
+                enhancer=AIEnhancer(provider(transport),AIOptions(figures=True,anomalies=True))
+                result=enhancer.enhance([{"text":text,"kind":"body"}])
+                self.assertEqual(result[0]["text"],text)
+
+    def test_figure_residue_false_leaves_the_paragraph_alone(self):
+        def transport(payload):
+            identifier=json.loads(payload["input"])[0]["id"]
+            return response([{"id":identifier,"figure_residue":False}])
+        enhancer=AIEnhancer(provider(transport),AIOptions(figures=True))
+        result=enhancer.enhance([{"text":"T ←","kind":"body"}])
+        self.assertEqual(result[0]["text"],"T ←")
+
     def test_custom_rule_is_appended_to_the_instructions_sent_to_the_provider(self):
         captured=[]
         def transport(payload):

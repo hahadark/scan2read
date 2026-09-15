@@ -75,10 +75,14 @@ def main(argv: list[str] | None = None) -> int:
     conversion.add_argument("--ai-headings", action="store_true", help="AI-detect chapter headings for the EPUB TOC")
     conversion.add_argument("--ai-glosses", action="store_true",
                             help="AI-remove redundant parenthetical transliteration glosses (e.g. '(체다카)' after '정의')")
+    conversion.add_argument("--ai-figures", action="store_true",
+                            help="AI-drop paragraphs that are stray text OCR'd out of a diagram or figure "
+                                 "(e.g. a lone 'T ←'); only ever drops text that also passes a local "
+                                 "short-and-not-prose check")
     conversion.add_argument("--ai-custom-rule", default="",
                             help="Free-text instruction added to every --ai-ocr-words/spacing/anomalies/"
-                                 "structure/headings/glosses request (e.g. \"'아자젤' is not a typo\"); "
-                                 "no effect unless at least one of those is also enabled")
+                                 "structure/headings/glosses/figures request (e.g. \"'아자젤' is not a "
+                                 "typo\"); no effect unless at least one of those is also enabled")
     conversion.add_argument("--ai-provider", choices=("openai", "anthropic", "google"), default="openai",
                             help="AI provider for --ai-* cleanup features")
     conversion.add_argument("--ai-model", default=None,
@@ -162,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.epubcheck is None or not args.epubcheck.is_file():
             raise ValueError("Set --epubcheck PATH or EPUBCHECK_JAR to an installed EPUBCheck JAR")
         ai_features=(args.ai_context,args.ai_ocr_words,args.ai_spacing,args.ai_anomalies,
-                     args.ai_structure,args.ai_headings,args.ai_glosses)
+                     args.ai_structure,args.ai_headings,args.ai_glosses,args.ai_figures)
         if any(ai_features) and not args.reconstruct:
             raise ValueError("AI cleanup options require --reconstruct")
         if args.ai_cost_limit_usd is not None and args.ai_cost_limit_usd < 0:
@@ -209,9 +213,11 @@ def main(argv: list[str] | None = None) -> int:
                         from scan2read.cleanup.ai_cache import AIResultCache
                         from scan2read.cleanup.ai_enhance import AIOptions, AIEnhancer
                         ai_enhancer=AIEnhancer(provider,AIOptions(
-                            args.ai_ocr_words,args.ai_spacing,args.ai_anomalies,
-                            args.ai_structure,args.ai_headings,args.ai_glosses,
-                            args.ai_custom_rule),budget=ai_budget,
+                            ocr_words=args.ai_ocr_words,spacing=args.ai_spacing,
+                            anomalies=args.ai_anomalies,structure=args.ai_structure,
+                            headings=args.ai_headings,glosses=args.ai_glosses,
+                            figures=args.ai_figures,
+                            custom_rule=args.ai_custom_rule),budget=ai_budget,
                             cache=AIResultCache(args.work_dir/"_ai_cache"),progress=report_progress)
                     else:logging.warning("%s is missing; skipping optional AI cleanup", env_var)
         convert(args.file, output, args.work_dir, engine,

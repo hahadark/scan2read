@@ -16,6 +16,7 @@ FEATURE_LABELS = {
     "structure": "제목·본문·각주 분류",
     "headings": "장·절 구조 및 목차 감지",
     "glosses": "괄호·음역 중복 표현 삭제",
+    "figures": "도식·그림 잔재 삭제",
 }
 
 
@@ -69,6 +70,9 @@ def estimate_book_usage(page_count: int, features: Iterable[str],
             output_per_page += 15
         if "glosses" in cleanup:
             output_per_page += 30
+        if "figures" in cleanup:
+            # One boolean per item -- the cheapest of the features.
+            output_per_page += 10
         output_tokens += pages * output_per_page
         maximum_output_tokens += pages * max(output_per_page * 2, 280)
     maximum = token_cost(math.ceil(input_tokens * 1.35), maximum_output_tokens, model=model)

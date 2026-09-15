@@ -63,12 +63,23 @@ AI는 `AI 기능 전체 사용`을 마스터 스위치로 사용하며 아래 �
 5. 제목·본문·각주 분류
 6. 장·절 구조 및 목차 감지
 7. 괄호·음역 중복 표현 삭제
+8. 도식·그림 잔재 삭제
 
-이 7개 아래에 자유 텍스트 "사용자 지정 규칙" 입력칸이 있다(`AIOptions.custom_rule`,
-300자 제한). 2~7번 요청의 `instructions`에 마지막 문장으로 덧붙을 뿐 그 자체는
-토글이 아니므로, 2~7 중 최소 하나가 켜져 있지 않으면 효과가 없다(1번 문단 경계
-판정에는 적용되지 않음). `_apply_edits`/`_apply_glosses`의 적용 시점 검증은
-그대로 거쳐야 하므로 규칙 문구가 안전장치를 우회하지는 못한다.
+8번은 **문단 전체를 삭제하는 유일한 기능**이다. 순서도·삽화 안의 낱글자와 화살표가
+본문 문단으로 잘못 뽑힌 경우(`T ←`, `Q ∠`)를 없애며, `record["text"]`를 빈 문자열로
+만들어 EPUB 생성 단계(`pipeline.py`가 falsy 텍스트를 건너뜀)에서 빠지게 한다 —
+`document.json`과 `ai_enhancements.json`에는 원문이 남고 Raw OCR은 그대로다. AI의
+`figure_residue: true` 하나만으로는 지우지 않고, `looks_like_figure_residue()`(40자
+이하, 문장 종결 부호 없음, 4글자 이상 한글 낱말 없음, 그리고 화살표·도형 기호가 있거나
+한글이 2자 이하)를 다시 통과해야 한다. 이 판정 함수는 `ai_filter`가 "보낼지"를 정할 때와
+`ai_enhance`가 "지울지"를 정할 때 같은 것을 쓰므로, 모델이 진짜 본문에 대해 true를
+반환해도 삭제될 수 없다.
+
+이 8개 아래에 자유 텍스트 "사용자 지정 규칙" 입력칸이 있다(`AIOptions.custom_rule`,
+300자 제한). 2~8번 요청의 `instructions`에 마지막 문장으로 덧붙을 뿐 그 자체는
+토글이 아니므로, 2~8 중 최소 하나가 켜져 있지 않으면 효과가 없다(1번 문단 경계
+판정에는 적용되지 않음). `_apply_edits`/`_apply_glosses`/`looks_like_figure_residue`의
+적용 시점 검증은 그대로 거쳐야 하므로 규칙 문구가 안전장치를 우회하지는 못한다.
 
 **2026-09-08 추가: 제공자·모델 선택.** 책 전체에 제공자(OpenAI/Anthropic Claude/Google
 Gemini)와 모델을 하나씩 고른다(기능별로 다른 제공자를 쓰는 방식은 채택하지 않음 — 구현이
@@ -505,7 +516,7 @@ $env:PYTHONPATH = "src"
 .\.tools\paddle-env\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 ```
 
-2026-09-15 현재 279개 통과, 실제 외부 OCR 환경 테스트 1개는 환경변수가 없으면 건너뛴다.
+2026-09-15 현재 286개 통과, 실제 외부 OCR 환경 테스트 1개는 환경변수가 없으면 건너뛴다.
 `tests/test_ai_usage.py`가 단가, 캐시 입력 비용, 기능별 무중복 배분, 호출 전 비용 차단과
 변환 전 추정치를 검사하고, `tests/test_ai_providers.py`가 OpenAI/Anthropic/Google 세
 제공자의 요청 형식과 응답 파싱을 검사한다. `tests/test_pipeline.py`의 `OcrOnlyTests`가
@@ -513,7 +524,8 @@ $env:PYTHONPATH = "src"
 확인하고, `tests/test_gui.py`가 청크 스케줄러(슬롯 채우기, 취소 순서, 진행률 집계)를
 검증한다. `tests/test_ai_enhance.py`가 괄호·음역 삭제의 안전장치(정확히 한 번만 등장,
 문단 길이 1/3 이내)와 사용자 지정 규칙(instructions에 반영, 공백만이면 무효, 300자
-제한)을 검사하고, `tests/test_gui.py`/`tests/test_cli.py`가 GUI 입력칸·CLI 플래그가
+제한), 도식 잔재 삭제(잔재는 비우고, 제목·이름·완결 문장은 AI가 지우라고 해도 남김)를
+검사하고, `tests/test_gui.py`/`tests/test_cli.py`가 GUI 입력칸·CLI 플래그가
 `AIOptions.custom_rule`까지 그대로 전달되는지 검사한다.
 
 현재 사용자가 실행하는 개발 빌드:
@@ -522,10 +534,17 @@ $env:PYTHONPATH = "src"
 C:\Users\Administrator\Documents\PDF to tts\build\Scan2Read\Scan2Read.exe
 ```
 
-이 실행 파일은 2026-09-15 21:28에 "사용자 지정 규칙" 기능 반영본으로 다시 빌드했고
-(`--distpath build/launcher` → `dist/Scan2Read` 동기화), exe 바이트코드 안에
-`ai_custom_rule`이 실제로 들어있는지, `app/scan2read`가 `src`와 해시까지 동일한지
-확인한 뒤 실행 파일을 띄워 정상 응답하는 것까지 확인했다. 이전 HiDPI 빌드
+이 실행 파일은 2026-09-15 21:50에 "사용자 지정 규칙"과 "도식·그림 잔재 삭제" 반영본으로
+다시 빌드했고(`--distpath build/launcher` → `dist/Scan2Read` 동기화), exe 바이트코드 안에
+`ai_custom_rule`/`ai_figures`가 실제로 들어있는지, `app/scan2read`가 `src`와 해시까지
+동일한지 확인한 뒤 실행 파일을 띄워 정상 응답하는 것까지 확인했다.
+
+참고로 이 exe의 PYZ에 실제로 박제되는 `scan2read` 모듈은 `gui`, `cleanup.ai_providers`,
+`cleanup.ai_usage`, `project.batch`, `project.credentials`뿐이다(GUI가 임포트하는 것만).
+`cleanup.ai_enhance`·`pipeline` 등 변환 본체는 들어있지 않고 CLI 서브프로세스가
+`app/scan2read`에서 읽으므로, 그쪽만 바뀐 변경은 소스 동기화로 충분하다 — 다만 어느
+쪽인지 확인하지 않고 넘기면 조용히 옛 GUI가 돌기 때문에, 바뀐 모듈이 위 목록에 있으면
+반드시 재빌드한다. 이전 HiDPI 빌드
 (2026-09-09 10:01, `dpi_scale`/`SetProcessDpiAwareness`/`GetScaleFactorForDevice`/`_px`
 포함 확인)도 같은 방식으로 검증된 바 있다.
 
@@ -585,6 +604,12 @@ GUI 실행 파일을 다시 만들 때는 `docs/CHANGELOG.md`의 `Process notes 
   검증했다.
 - 문단이 1,600자를 넘으면 현재 AI 통합 보정에서 건너뛴다.
 - 제목·본문·각주 분류 결과 중 제목은 EPUB 구조에 반영하지만, AI가 `footnote`로 분류했다는
-  이유만으로 본문을 자동 삭제하지 않는다.
+  이유만으로 본문을 자동 삭제하지 않는다. 문단을 실제로 삭제하는 경로는 "도식·그림 잔재
+  삭제" 하나뿐이며, 그것도 AI 판정에 더해 로컬 `looks_like_figure_residue()` 검사를 함께
+  통과해야 한다.
+- "도식·그림 잔재 삭제"의 로컬 판정은 순전히 형태(길이·종결 부호·한글 낱말 길이·기호)만
+  본다. 도표 안 라벨이 네 글자 이상의 한글 낱말이면(예: "의사결정 단계") 잔재로 보지 않고
+  남기므로, 한글 라벨이 많은 도표는 이 기능으로 정리되지 않는다 — 놓치는 쪽으로 틀리게
+  설계한 것이고, 실제 책으로 이 균형이 맞는지는 확인하지 않았다.
 - 복잡한 표, 세로쓰기, 잡지형 다단 편집과 완벽한 각주 복원은 MVP 범위 밖이다.
 - 저작권 도서 전체를 테스트 fixture나 저장소에 추가하지 않는다.

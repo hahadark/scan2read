@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import difflib
 import json
 import logging
+import re
 import threading
 import time
 
@@ -25,7 +26,37 @@ _MAX_CUSTOM_RULE_CHARS = 300
 # "활성 기능" sentence and the feature-name list expect. `custom_rule` is a
 # free-text field, not a toggle, so it's deliberately excluded here -- it
 # gets folded into cache/budget tracking separately, by its own content.
-_TOGGLE_FIELDS = ("ocr_words", "spacing", "anomalies", "structure", "headings", "glosses")
+_TOGGLE_FIELDS = ("ocr_words", "spacing", "anomalies", "structure", "headings",
+                  "glosses", "figures")
+
+_ARROWS_AND_SHAPES = re.compile(r"[←→↑↓↔⇐⇒⇔∠△▲□■○●◇◆※＊✓✔·•]")
+_HANGUL = re.compile(r"[가-힣]")
+_HANGUL_WORD = re.compile(r"[가-힣]{4,}")
+_ENDS_A_SENTENCE = re.compile(r"[.!?。」』]$")
+
+
+def looks_like_figure_residue(text: str) -> bool:
+    """Whether `text` could plausibly be stray text OCR'd out of a diagram,
+    chart, or figure rather than real prose -- e.g. "T ←", "Q ∠", "F ←".
+
+    Deliberately a *local* test with no AI involved, used twice: once in
+    `ai_filter` to decide whether asking is even worth the tokens, and again
+    in `_apply_figure_residue` as the safety net before honouring a drop. A
+    paragraph the model wants deleted must still look like residue by this
+    test, so a hallucinated `figure_residue: true` on real prose cannot
+    delete anything -- the same "AI only chooses within a locally validated
+    envelope" rule the other features follow.
+    """
+    stripped = text.strip()
+    if not stripped or len(stripped) > 40:
+        return False
+    if _ENDS_A_SENTENCE.search(stripped):
+        return False
+    # Any real Korean word of four syllables or more means this reads as
+    # content (a short heading, a name, a caption), not as a diagram label.
+    if _HANGUL_WORD.search(stripped):
+        return False
+    return bool(_ARROWS_AND_SHAPES.search(stripped)) or len(_HANGUL.findall(stripped)) <= 2
 
 
 @dataclass(frozen=True)
@@ -36,11 +67,12 @@ class AIOptions:
     structure: bool = False
     headings: bool = False
     glosses: bool = False
+    figures: bool = False
     custom_rule: str = ""
 
     def active(self) -> bool:
         return any((self.ocr_words, self.spacing, self.anomalies, self.structure,
-                    self.headings, self.glosses))
+                    self.headings, self.glosses, self.figures))
 
 
 class AIEnhancer:
@@ -108,6 +140,8 @@ class AIEnhancer:
         if self.options.glosses:
             properties["remove_glosses"]={"type":"array","items":{"type":"string"}}
             required.append("remove_glosses")
+        if self.options.figures:
+            properties["figure_residue"]={"type":"boolean"};required.append("figure_residue")
         item_schema={"type":"object","additionalProperties":False,
                      "properties":properties,"required":required}
         schema={"type":"object","additionalProperties":False,
@@ -134,7 +168,10 @@ class AIEnhancer:
             "소리 내어 읽으면 같은 말이 반복되는 것처럼 들리는 부분만 골라 원문 그대로(괄호나 "
             "따옴표 등 OCR이 깨뜨렸을 수 있는 기호까지 포함해) 부분 문자열로 담는다. 의미가 "
             "다르거나 처음 나오는 용어 설명, 성경 구절 번호처럼 반복이 아닌 내용은 포함하지 "
-            "않는다.")
+            "않는다. figure_residue는 그 문단이 본문 문장이 아니라 도표·순서도·삽화 안의 "
+            "낱개 글자나 기호(예: \"T ←\", \"Q ∠\", \"F ←\")를 OCR이 본문처럼 잘못 뽑아낸 "
+            "것일 때만 true다. 짧더라도 제목, 사람 이름, 표 안의 실제 항목, 읽어서 뜻이 "
+            "통하는 구절이면 false다.")
         custom_rule=self.options.custom_rule.strip()[:_MAX_CUSTOM_RULE_CHARS]
         if custom_rule:
             # A free-text steer from the user (e.g. "'아자젤'은 오타가 아니니 고치지
@@ -183,6 +220,19 @@ class AIEnhancer:
             applied.append(span)
         return text,applied
 
+    @staticmethod
+    def _drops_as_figure_residue(text,item):
+        """Whether to honour a `figure_residue: true` by emptying the paragraph.
+
+        Emptying is how a paragraph leaves the EPUB (pipeline.py skips records
+        with falsy text) while `document.json` and the audit trail still keep
+        the original -- and Raw OCR is untouched either way. This is the only
+        feature that removes a whole paragraph rather than editing inside one,
+        so the model's vote alone is not enough: the text must still pass the
+        same local residue test that got it sent in the first place.
+        """
+        return bool(item.get("figure_residue")) and looks_like_figure_residue(text)
+
     def _apply_item(self,record,item):
         """Apply one validated response item to a copy of `record`; return the audit fields."""
         before=record["text"];text=before;applied=[]
@@ -198,10 +248,16 @@ class AIEnhancer:
         if self.options.structure and item.get("kind","unchanged")!="unchanged":kind=item["kind"]
         if self.options.headings and item.get("heading_level",0)>0:kind="heading"
         heading_level=item.get("heading_level",0) if self.options.headings else 0
+        # Last, so it is judged against the text as the reader would see it
+        # after every other correction -- and so an emptied paragraph cannot
+        # be resurrected by a later step writing into it.
+        dropped=self.options.figures and self._drops_as_figure_residue(text,item)
+        if dropped:text=""
         record["text"]=text;record["kind"]=kind;record["heading_level"]=heading_level
         return {"before":before,"after":text,"applied_edits":applied,
                 "anomalies":item.get("anomalies",[]) if self.options.anomalies else [],
-                "kind":kind,"heading_level":heading_level,"removed_glosses":removed_glosses}
+                "kind":kind,"heading_level":heading_level,"removed_glosses":removed_glosses,
+                "dropped_figure_residue":dropped}
 
     def _call_batch(self,to_call,features):
         """Send exactly one batch's worth of not-yet-cached items. Safe to run

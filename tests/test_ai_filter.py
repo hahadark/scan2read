@@ -58,3 +58,15 @@ class AIFilterTests(unittest.TestCase):
 
     def test_paragraph_without_any_paren_is_skipped_for_glosses(self):
         self.assertFalse(needs_ai_review("정의는 체다카의 뜻이다.", "body", AIOptions(glosses=True)))
+
+    def test_diagram_fragments_are_sent_for_figure_review(self):
+        for text in ("T ←", "Q ∠", "F ←", "L"):
+            with self.subTest(text=text):
+                self.assertTrue(needs_ai_review(text, "body", AIOptions(figures=True)))
+
+    def test_real_short_text_is_not_sent_for_figure_review(self):
+        # A heading, a person's name, and a complete short sentence: all
+        # short, none of them diagram residue.
+        for text in ("리더십은 저절로 성장하지 않는다", "진재혁 목사", "그렇다."):
+            with self.subTest(text=text):
+                self.assertFalse(needs_ai_review(text, "body", AIOptions(figures=True)))

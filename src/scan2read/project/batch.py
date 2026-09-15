@@ -29,6 +29,7 @@ class Preferences:
     ai_structure: bool = False
     ai_headings: bool = False
     ai_glosses: bool = False
+    ai_figures: bool = False
     ai_custom_rule: str = ""
     ai_cost_limit_usd: str = "1.00"
     max_parallel_conversions: str = "2"

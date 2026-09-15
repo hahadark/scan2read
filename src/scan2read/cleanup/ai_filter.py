@@ -8,7 +8,7 @@ under-filtering only costs missed polish, never correctness.
 """
 import re
 
-from scan2read.cleanup.ai_enhance import AIOptions
+from scan2read.cleanup.ai_enhance import AIOptions, looks_like_figure_residue
 from scan2read.pdf.text_layer import has_corruption_markers
 
 # A short run of Latin letters/digits fused directly onto Hangul with no
@@ -40,6 +40,8 @@ def needs_ai_review(text: str, kind: str, options: AIOptions) -> bool:
     if (options.structure or options.headings) and _looks_like_heading_candidate(text, kind):
         return True
     if options.glosses and _HAS_PAREN.search(text):
+        return True
+    if options.figures and looks_like_figure_residue(text):
         return True
     return False
 

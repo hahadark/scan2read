@@ -61,6 +61,9 @@
   (`gui.py`의 `dpi_scale()`).
 - 저장소를 GitHub(현재 공개)에 올리고 사용자용 문서(README/INSTALL.md/WINDOWS.md)를
   분리, 최신 소스 기준 설치 파일을 Release로 배포.
+- "도식·그림 잔재 삭제"(`AIOptions.figures`): 순서도·삽화에서 나온 낱글자/화살표 문단을
+  통째로 제거하는 첫 번째 삭제형 기능. AI 판정 + 로컬 `looks_like_figure_residue()` 두
+  관문을 모두 통과해야 지운다.
 - AI 설정 탭에 자유 텍스트 "사용자 지정 규칙" 입력칸 추가(`AIOptions.custom_rule`).
   다른 6개 AI 기능 중 최소 하나가 켜져 있을 때 그 요청들의 지침에 덧붙는다(문단
   경계 판정 제외). 규칙 문구가 바뀌면 캐시 키도 함께 바뀌어 옛 규칙으로 계산된

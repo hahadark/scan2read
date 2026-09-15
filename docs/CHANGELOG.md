@@ -17,6 +17,62 @@ findings and rejected approaches, which those reference docs don't carry.
 
 ## 2026-09-15
 
+### Dropping figure/diagram residue, the first feature that deletes a whole paragraph
+
+The user converted a real book (부교역자리더십) and opened the result: between
+genuine paragraphs sat a run of junk lines -- `T ←`, `L`, `T ←`, `L`, `T ←`,
+`F ←`, `L`, then later `T ←`, `T ←`, `T ←`, `Q ∠`. The regular pattern of
+single Latin letters plus arrows reads as a flowchart or decision diagram
+whose labels PaddleOCR pulled out as ordinary text lines.
+
+Nothing in the app removed these, and it's worth recording why, because each
+near-miss was deliberate:
+
+- `cleanup/noise.py` only deletes a *lone* one-off block that merged with
+  nothing else. This is a dozen of them in a row, so the isolation test
+  fails.
+- The `anomalies` AI feature records suspicious characters for the audit
+  trail; it never deletes.
+- The `structure` AI feature can classify a block as `footnote` or
+  `page_element`, but by an explicit standing rule a classification alone
+  never removes body text.
+- The `custom_rule` field added earlier the same day can't help either: it
+  steers `ocr_edits`, which are ≤30-character substitutions inside a
+  paragraph, not whole-paragraph removal.
+
+So this needed a new feature, `AIOptions.figures` ("도식·그림 잔재 삭제"), and
+it is the first one that deletes a paragraph outright rather than editing
+within one. Deletion works by emptying `record["text"]`: `pipeline.py`
+already skips falsy records when yielding paragraphs to the EPUB builder,
+while `document.json` and `ai_enhancements.json` keep the original text and
+Raw OCR is untouched -- so nothing is actually lost, it just stops being
+read aloud.
+
+- Because it deletes, the model's vote is explicitly not sufficient. The
+  same local predicate, `looks_like_figure_residue()`, gates it twice:
+  `ai_filter` uses it to decide whether a paragraph is even worth asking
+  about, and `_drops_as_figure_residue` re-checks it before honouring a
+  `figure_residue: true`. A paragraph must be ≤40 characters, not end in
+  sentence punctuation, contain no Korean word of 4+ syllables, and either
+  carry an arrow/geometric glyph or have at most 2 Hangul characters. A
+  hallucinated `true` on real prose therefore cannot delete anything --
+  same "AI chooses only inside a locally validated envelope" shape as
+  `_apply_edits` and `_apply_glosses`, just applied to a whole record.
+- The predicate lives in `ai_enhance.py`, not `ai_filter.py`, purely
+  because `ai_filter` already imports from `ai_enhance` and the reverse
+  would be circular.
+- Errs toward under-removal on purpose: a diagram whose labels are real
+  Korean words ("의사결정 단계") keeps them. Missing some junk is recoverable
+  by hand; silently deleting a real short heading is not.
+- Tests: residue is emptied and audited; a heading, a name, and a short
+  complete sentence all survive a `figure_residue: true`; `false` leaves
+  text alone; the filter sends `T ←`/`Q ∠`/`L` and refuses the three real
+  ones. Plus CLI `--ai-figures` and the GUI checkbox. 286 tests total.
+- `cli.py`'s `AIOptions(...)` construction switched from positional to
+  keyword arguments while adding the 8th field -- with a string
+  (`custom_rule`) already in the list, positional order had become a
+  silent-breakage trap for the next field added.
+
 ### Free-text custom rules for the AI cleanup features, and switching the repo public
 
 Two unrelated asks in one session: first, whether GPT-6 Astra supports a
