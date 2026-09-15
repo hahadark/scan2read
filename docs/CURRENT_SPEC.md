@@ -64,6 +64,12 @@ AI는 `AI 기능 전체 사용`을 마스터 스위치로 사용하며 아래 �
 6. 장·절 구조 및 목차 감지
 7. 괄호·음역 중복 표현 삭제
 
+이 7개 아래에 자유 텍스트 "사용자 지정 규칙" 입력칸이 있다(`AIOptions.custom_rule`,
+300자 제한). 2~7번 요청의 `instructions`에 마지막 문장으로 덧붙을 뿐 그 자체는
+토글이 아니므로, 2~7 중 최소 하나가 켜져 있지 않으면 효과가 없다(1번 문단 경계
+판정에는 적용되지 않음). `_apply_edits`/`_apply_glosses`의 적용 시점 검증은
+그대로 거쳐야 하므로 규칙 문구가 안전장치를 우회하지는 못한다.
+
 **2026-09-08 추가: 제공자·모델 선택.** 책 전체에 제공자(OpenAI/Anthropic Claude/Google
 Gemini)와 모델을 하나씩 고른다(기능별로 다른 제공자를 쓰는 방식은 채택하지 않음 — 구현이
 단순하고 비용 예측이 쉬움). 제공자 콤보박스는 읽기 전용, 모델 콤보박스는 자유 입력 —
@@ -499,14 +505,16 @@ $env:PYTHONPATH = "src"
 .\.tools\paddle-env\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 ```
 
-2026-09-09 현재 273개 통과, 실제 외부 OCR 환경 테스트 1개는 환경변수가 없으면 건너뛴다.
+2026-09-15 현재 279개 통과, 실제 외부 OCR 환경 테스트 1개는 환경변수가 없으면 건너뛴다.
 `tests/test_ai_usage.py`가 단가, 캐시 입력 비용, 기능별 무중복 배분, 호출 전 비용 차단과
 변환 전 추정치를 검사하고, `tests/test_ai_providers.py`가 OpenAI/Anthropic/Google 세
 제공자의 요청 형식과 응답 파싱을 검사한다. `tests/test_pipeline.py`의 `OcrOnlyTests`가
 페이지 구간을 나눠 `ocr_only()`로 채운 캐시를 이후 `convert()`가 그대로 재사용하는지
 확인하고, `tests/test_gui.py`가 청크 스케줄러(슬롯 채우기, 취소 순서, 진행률 집계)를
 검증한다. `tests/test_ai_enhance.py`가 괄호·음역 삭제의 안전장치(정확히 한 번만 등장,
-문단 길이 1/3 이내)를 검사한다.
+문단 길이 1/3 이내)와 사용자 지정 규칙(instructions에 반영, 공백만이면 무효, 300자
+제한)을 검사하고, `tests/test_gui.py`/`tests/test_cli.py`가 GUI 입력칸·CLI 플래그가
+`AIOptions.custom_rule`까지 그대로 전달되는지 검사한다.
 
 현재 사용자가 실행하는 개발 빌드:
 
@@ -514,10 +522,12 @@ $env:PYTHONPATH = "src"
 C:\Users\Administrator\Documents\PDF to tts\build\Scan2Read\Scan2Read.exe
 ```
 
-이 실행 파일은 2026-09-09 10:01에 HiDPI 대응 최종본으로 다시 빌드했고
-(`--distpath build/launcher` → `dist/Scan2Read` 동기화), GUI 기동과 exe 바이트코드
-안에 `dpi_scale`/`SetProcessDpiAwareness`/`GetScaleFactorForDevice`/`_px`가 실제로
-들어있는지 확인했다.
+이 실행 파일은 2026-09-15 21:28에 "사용자 지정 규칙" 기능 반영본으로 다시 빌드했고
+(`--distpath build/launcher` → `dist/Scan2Read` 동기화), exe 바이트코드 안에
+`ai_custom_rule`이 실제로 들어있는지, `app/scan2read`가 `src`와 해시까지 동일한지
+확인한 뒤 실행 파일을 띄워 정상 응답하는 것까지 확인했다. 이전 HiDPI 빌드
+(2026-09-09 10:01, `dpi_scale`/`SetProcessDpiAwareness`/`GetScaleFactorForDevice`/`_px`
+포함 확인)도 같은 방식으로 검증된 바 있다.
 
 **주의**: `Scan2Read.spec`은 `scan2read` 패키지 전체를 exe의 PYZ에 넣는다. 따라서 GUI
 프로세스는 `app/scan2read`가 아니라 **빌드 시점에 박제된 사본**을 실행한다(`app/scan2read`는
@@ -560,6 +570,10 @@ GUI 실행 파일을 다시 만들 때는 `docs/CHANGELOG.md`의 `Process notes 
 - "괄호·음역 중복 표현 삭제"는 실제 API 호출로 검증하지 않고 가짜 transport 단위
   테스트로만 확인했다 — AI가 문맥을 얼마나 정확히 판단하는지(과다 삭제·과소 삭제)는
   실제 책으로 확인이 필요하다.
+- "사용자 지정 규칙"도 가짜 transport 단위 테스트로만 확인했다 — 실제 모델이 자유
+  텍스트 지침을 얼마나 잘 따르는지(무시하거나 과잉 적용하는 정도)는 검증하지 않았다.
+  규칙이 다른 6개 기능의 스키마·검증 로직 자체를 바꾸지는 않으므로 최악의 경우도
+  "규칙이 안 먹힘"이지 "안전장치 우회"는 아니다.
 - `sv-ttk`가 새 필수 의존성이 됐다(`pyproject.toml`). 개발 venv(`.tools/paddle-env`)와
   PyInstaller 빌드 venv(`.venv`) 양쪽에 설치해야 하며, `Scan2Read.spec`이
   `collect_data_files('sv_ttk')`로 `.tcl`/`.png` 테마 파일을 프리징에 포함하지 않으면

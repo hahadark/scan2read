@@ -83,6 +83,39 @@ class AIEnhanceTests(unittest.TestCase):
         self.assertEqual(result[0]["text"],"정의(체다카)와 정의(체다카)는 같다.")
         self.assertEqual(enhancer.audit_records[0]["removed_glosses"],[])
 
+    def test_custom_rule_is_appended_to_the_instructions_sent_to_the_provider(self):
+        captured=[]
+        def transport(payload):
+            captured.append(payload["instructions"])
+            identifier=json.loads(payload["input"])[0]["id"]
+            return response([{"id":identifier,"ocr_edits":[]}])
+        enhancer=AIEnhancer(provider(transport),
+            AIOptions(ocr_words=True,custom_rule="'아자젤'은 오타가 아니니 고치지 마세요"))
+        enhancer.enhance([{"text":"아자젤이 등장한다","kind":"body"}])
+        self.assertIn("아자젤",captured[0])
+
+    def test_blank_custom_rule_adds_nothing_to_the_instructions(self):
+        captured=[]
+        def transport(payload):
+            captured.append(payload["instructions"])
+            identifier=json.loads(payload["input"])[0]["id"]
+            return response([{"id":identifier,"ocr_edits":[]}])
+        with_blank=AIEnhancer(provider(transport),AIOptions(ocr_words=True,custom_rule="   "))
+        with_blank.enhance([{"text":"본문","kind":"body"}])
+        without=AIEnhancer(provider(transport),AIOptions(ocr_words=True))
+        without.enhance([{"text":"본문","kind":"body"}])
+        self.assertEqual(captured[0],captured[1])
+
+    def test_custom_rule_is_clipped_to_a_bounded_length(self):
+        captured=[]
+        def transport(payload):
+            captured.append(payload["instructions"])
+            identifier=json.loads(payload["input"])[0]["id"]
+            return response([{"id":identifier,"ocr_edits":[]}])
+        enhancer=AIEnhancer(provider(transport),AIOptions(ocr_words=True,custom_rule="가"*10000))
+        enhancer.enhance([{"text":"본문","kind":"body"}])
+        self.assertLess(len(captured[0]),10000)
+
     def test_second_identical_paragraph_reuses_cache_with_no_new_call(self):
         calls=[]
         def transport(payload):

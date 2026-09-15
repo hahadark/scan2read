@@ -115,6 +115,31 @@ class CLITests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue(captured["ai_enhancer"].options.glosses)
 
+    def test_ai_custom_rule_flag_reaches_the_enhancer_options(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "book.pdf"
+            with pdfium.PdfDocument.new() as document:
+                with closing(document.new_page(72, 144)):
+                    pass
+                document.save(source)
+            epubcheck = root / "epubcheck.jar"
+            epubcheck.write_bytes(b"")
+            captured = {}
+            def fake_convert(*args, **kwargs):
+                captured.update(kwargs)
+                return source.with_suffix(".epub")
+            with patch("scan2read.pipeline.convert", side_effect=fake_convert), \
+                 patch("scan2read.ocr.tesseract.TesseractEngine.cache_identity", return_value="v1"), \
+                 patch.dict(sys.modules, {"kiwipiepy": _fake_kiwipiepy_module()}), \
+                 patch.dict("os.environ", {"OPENAI_API_KEY": "sk-secret"}, clear=False):
+                code = main(["convert", str(source), "--reconstruct", "--ai-glosses",
+                             "--ai-custom-rule", "'아자젤'은 오타가 아니니 고치지 마세요",
+                             "--epubcheck", str(epubcheck)])
+            self.assertEqual(code, 0)
+            self.assertEqual(captured["ai_enhancer"].options.custom_rule,
+                              "'아자젤'은 오타가 아니니 고치지 마세요")
+
     def test_missing_provider_specific_key_skips_ai_and_still_converts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

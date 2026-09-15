@@ -75,6 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     conversion.add_argument("--ai-headings", action="store_true", help="AI-detect chapter headings for the EPUB TOC")
     conversion.add_argument("--ai-glosses", action="store_true",
                             help="AI-remove redundant parenthetical transliteration glosses (e.g. '(체다카)' after '정의')")
+    conversion.add_argument("--ai-custom-rule", default="",
+                            help="Free-text instruction added to every --ai-ocr-words/spacing/anomalies/"
+                                 "structure/headings/glosses request (e.g. \"'아자젤' is not a typo\"); "
+                                 "no effect unless at least one of those is also enabled")
     conversion.add_argument("--ai-provider", choices=("openai", "anthropic", "google"), default="openai",
                             help="AI provider for --ai-* cleanup features")
     conversion.add_argument("--ai-model", default=None,
@@ -206,7 +210,8 @@ def main(argv: list[str] | None = None) -> int:
                         from scan2read.cleanup.ai_enhance import AIOptions, AIEnhancer
                         ai_enhancer=AIEnhancer(provider,AIOptions(
                             args.ai_ocr_words,args.ai_spacing,args.ai_anomalies,
-                            args.ai_structure,args.ai_headings,args.ai_glosses),budget=ai_budget,
+                            args.ai_structure,args.ai_headings,args.ai_glosses,
+                            args.ai_custom_rule),budget=ai_budget,
                             cache=AIResultCache(args.work_dir/"_ai_cache"),progress=report_progress)
                     else:logging.warning("%s is missing; skipping optional AI cleanup", env_var)
         convert(args.file, output, args.work_dir, engine,

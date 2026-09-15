@@ -17,6 +17,16 @@ from scan2read.cleanup.parentheses import tidy_whitespace
 
 logger = logging.getLogger(__name__)
 
+# Keeps one user-supplied sentence or two from ballooning per-batch prompt
+# tokens (every batch resends the full instructions string).
+_MAX_CUSTOM_RULE_CHARS = 300
+
+# The boolean feature toggles on AIOptions, in the fixed order the
+# "활성 기능" sentence and the feature-name list expect. `custom_rule` is a
+# free-text field, not a toggle, so it's deliberately excluded here -- it
+# gets folded into cache/budget tracking separately, by its own content.
+_TOGGLE_FIELDS = ("ocr_words", "spacing", "anomalies", "structure", "headings", "glosses")
+
 
 @dataclass(frozen=True)
 class AIOptions:
@@ -26,6 +36,7 @@ class AIOptions:
     structure: bool = False
     headings: bool = False
     glosses: bool = False
+    custom_rule: str = ""
 
     def active(self) -> bool:
         return any((self.ocr_words, self.spacing, self.anomalies, self.structure,
@@ -73,7 +84,7 @@ class AIEnhancer:
                            "elapsed_seconds":round(elapsed,1),"estimated_remaining_seconds":remaining})
 
     def _build_request(self,batch):
-        enabled=[name for name,value in vars(self.options).items() if value]
+        enabled=[name for name in _TOGGLE_FIELDS if getattr(self.options,name)]
         items=[{"id":i,"text":record["text"][:1600],"current_kind":record.get("kind","body")}
                for i,record in batch if len(record["text"])<=1600]
         properties={"id":{"type":"integer"}}
@@ -124,6 +135,17 @@ class AIEnhancer:
             "따옴표 등 OCR이 깨뜨렸을 수 있는 기호까지 포함해) 부분 문자열로 담는다. 의미가 "
             "다르거나 처음 나오는 용어 설명, 성경 구절 번호처럼 반복이 아닌 내용은 포함하지 "
             "않는다.")
+        custom_rule=self.options.custom_rule.strip()[:_MAX_CUSTOM_RULE_CHARS]
+        if custom_rule:
+            # A free-text steer from the user (e.g. "'아자젤'은 오타가 아니니 고치지
+            # 마세요"), appended last so it reads as an additional constraint on
+            # top of the fixed rules above rather than replacing them. It can
+            # only bias *which* edits the model proposes -- every edit still has
+            # to pass the same deterministic safety checks in _apply_edits/
+            # _apply_glosses (verbatim match, length limits, similarity ratio),
+            # so a rule can't make the model rewrite prose wholesale even if
+            # worded that way.
+            instructions+=f" 사용자 지정 규칙(다른 지침을 지키는 범위 안에서 참고): {custom_rule}"
         input_json=json.dumps(items,ensure_ascii=False)
         return instructions,input_json,schema,output_limit
 
@@ -246,7 +268,15 @@ class AIEnhancer:
     def enhance(self,records):
         result=[dict(record) for record in records]
         indexed=[(i,r) for i,r in enumerate(result) if r.get("text")]
-        features=[name for name,value in vars(self.options).items() if value]
+        features=[name for name in _TOGGLE_FIELDS if getattr(self.options,name)]
+        custom_rule=self.options.custom_rule.strip()[:_MAX_CUSTOM_RULE_CHARS]
+        if custom_rule:
+            # Folded into the cache/budget feature set by its own content (not
+            # just a fixed marker) so editing the rule's wording -- not only
+            # toggling it on/off -- invalidates cache entries computed under
+            # the old wording, the same way SCHEMA_VERSION invalidates entries
+            # from an old prompt.
+            features.append(f"custom_rule:{custom_rule}")
         batches=[]
         for start in range(0,len(indexed),self.batch_size):
             batch=indexed[start:start+self.batch_size]

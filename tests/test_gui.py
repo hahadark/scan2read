@@ -131,6 +131,7 @@ class GuiTests(unittest.TestCase):
         self.app.columns.set('2단');self.app.spacing.set(False)
         self.app.page_range.set('3-8');self.app.remove_footnotes.set(True)
         self.app.remove_parentheses.set(True);self.app.ignore_text_layer.set(True);self.app.use_gpu.set(False)
+        self.app.ai_custom_rule.set("'아자젤'은 오타가 아니니 고치지 마세요")
         self.app._save_settings()
         self.app.events.put(('gpu-status',{'gpu_name':'NVIDIA test','installed':True}));self.app.poll()
         self.assertFalse(self.app.use_gpu.get())
@@ -140,6 +141,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(saved.name_rule,'{name}_tts')
         self.assertFalse(saved.spacing);self.assertTrue(saved.remove_footnotes)
         self.assertEqual(saved.page_range,'3-8');self.assertFalse(saved.use_gpu)
+        self.assertEqual(saved.ai_custom_rule,"'아자젤'은 오타가 아니니 고치지 마세요")
 
     def test_flags_and_page_range_apply_to_batch(self):
         self.add('a.pdf','b.pdf')
@@ -277,6 +279,26 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(environment['OPENAI_API_KEY'],'sk-test-secret')
         saved=json.loads(self.settings_path.read_text(encoding='utf-8'))
         self.assertNotIn('api_key',saved)
+        self.app.active={};self.app.in_batch=False
+
+    def test_custom_rule_is_passed_only_when_set_and_ai_is_on(self):
+        self.add('a.pdf')
+        self.app.use_ai_context.set(True);self.app.ai_ocr_words.set(True)
+        self.app.ai_custom_rule.set("  '아자젤'은 오타가 아니니 고치지 마세요  ")
+        with patch('scan2read.gui.subprocess.Popen',return_value=Mock(stdout=iter([]))) as popen:
+            self.app.start()
+            command=popen.call_args.args[0]
+        self.assertEqual(command[command.index('--ai-custom-rule')+1],"'아자젤'은 오타가 아니니 고치지 마세요")
+        self.app.active={};self.app.in_batch=False
+
+    def test_blank_custom_rule_omits_the_flag(self):
+        self.add('a.pdf')
+        self.app.use_ai_context.set(True);self.app.ai_ocr_words.set(True)
+        self.app.ai_custom_rule.set('   ')
+        with patch('scan2read.gui.subprocess.Popen',return_value=Mock(stdout=iter([]))) as popen:
+            self.app.start()
+            command=popen.call_args.args[0]
+        self.assertNotIn('--ai-custom-rule',command)
         self.app.active={};self.app.in_batch=False
 
     def test_launch_command_includes_provider_and_model_with_matching_env_var(self):

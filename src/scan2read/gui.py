@@ -316,6 +316,13 @@ class Application:
             feature=ttk.Checkbutton(features,text=title,variable=var)
             feature.grid(row=index//3,column=index%3,sticky="w",padx=(0,18),pady=2)
             self.edit_controls.append((feature,"normal"))
+        rule_row=ttk.Frame(tab_ai);rule_row.pack(fill="x",pady=(0,3))
+        ttk.Label(rule_row,text="사용자 지정 규칙").pack(side="left")
+        rule_entry=ttk.Entry(rule_row,textvariable=self.ai_custom_rule)
+        rule_entry.pack(side="left",fill="x",expand=True,padx=8);self.edit_controls.append((rule_entry,"normal"))
+        ttk.Label(tab_ai,text="예: '아자젤'은 오타가 아니니 고치지 마세요. 위 기능 중 최소 하나를 켜야 적용됩니다"
+                              "(문단 경계 검사에는 적용되지 않음).",
+                  foreground="#555",wraplength=self._px(760)).pack(anchor="w")
         cost_row=ttk.Frame(tab_ai);cost_row.pack(fill="x",pady=(0,3))
         ttk.Label(cost_row,text="책 한 권당 비용 한도 (USD)").pack(side="left")
         limit_entry=ttk.Entry(cost_row,textvariable=self.ai_cost_limit_usd,width=10)
@@ -765,6 +772,8 @@ class Application:
                 (self.ai_headings.get(),"--ai-headings"),(self.ai_glosses.get(),"--ai-glosses")]:
                 if enabled:command.append(flag)
             command+=["--ai-provider",self.ai_provider.get(),"--ai-model",self.ai_model.get()]
+            rule=self.ai_custom_rule.get().strip()
+            if rule:command+=["--ai-custom-rule",rule]
         if self.remove_footnotes.get():command.append("--remove-footnotes")
         if self.remove_parentheses.get():command.append("--remove-parentheses")
         if self.gpu_installed and self.use_gpu.get():command.append("--gpu")

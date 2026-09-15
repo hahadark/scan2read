@@ -15,6 +15,81 @@ picks this project up next. Feature-level usage docs live in
 narrative of *how* things got to their current state, including real-book
 findings and rejected approaches, which those reference docs don't carry.
 
+## 2026-09-15
+
+### Free-text custom rules for the AI cleanup features, and switching the repo public
+
+Two unrelated asks in one session: first, whether GPT-6 Astra supports a
+reasoning-effort level, prompted by the "low"/removed-from-registry
+discussion five days earlier -- looked it up (yes: low/medium/high/xhigh/
+max, no `none`) and reported back with third-party benchmark numbers,
+without re-adding it to the registry (the removal was a cost decision,
+unaffected by which effort level it runs at). Then the repo was switched
+from private to public on direct request (`gh repo edit --visibility
+public --accept-visibility-change-consequences`).
+
+Then: "AI기능을 이용할 때 내가 자연어로 규칙을 지정할 수 있는 기능을 넣어줘" --
+let the user steer the AI cleanup features with a plain-language instruction
+(e.g. "'아자젤'은 오타가 아니니 고치지 마세요"), not just toggle them.
+
+- `AIOptions` gained a 7th field, `custom_rule: str = ""` -- unlike the six
+  existing fields it isn't a toggle with its own schema property; it's
+  free text appended as a final sentence to whichever of the six features'
+  `instructions` are already active in `_build_request()`. Scoped
+  deliberately to `ai_enhance.py`'s six features only, not
+  `ai_context.py`'s paragraph-boundary joiner (its output is a bare
+  join/no-join boolean; a prose rule doesn't have much to bias there, and
+  its `_INSTRUCTIONS` is a class-level constant, not built per-instance).
+  Clipped to 300 characters (`_MAX_CUSTOM_RULE_CHARS`) so one runaway
+  paragraph of "rules" doesn't inflate every batch's prompt.
+- **Caught and fixed a bug while wiring this in, before it shipped**: both
+  `_build_request()`'s "활성 기능" list and `enhance()`'s cache/budget
+  `features` list were built as `[name for name, value in
+  vars(self.options).items() if value]` -- iterating *every* dataclass
+  field's truthiness. A non-blank `custom_rule` string is truthy, so it
+  started showing up as a fake feature literally named "custom_rule" in
+  the model-facing sentence, and a whitespace-only value like `"   "` (also
+  truthy) silently perturbed the cache key. Introduced `_TOGGLE_FIELDS =
+  ("ocr_words", "spacing", "anomalies", "structure", "headings",
+  "glosses")` as the single source of truth for both call sites, and
+  handle `custom_rule` on its own terms: stripped and length-clipped, and
+  -- when non-blank -- appended to `enhance()`'s `features` list as
+  `f"custom_rule:{text}"` specifically so cache entries invalidate when the
+  *wording* changes, not just when the field is toggled on/off (the same
+  reasoning `SCHEMA_VERSION` already applies to prompt changes generally).
+  A test that compared the instructions sent for a blank vs. unset rule
+  caught this immediately (`assertEqual(captured[0], captured[1])` failed
+  with "custom_rule" sitting in one of the two feature lists).
+- The edit-time safety nets (`_apply_edits`'s confidence/length/similarity
+  checks, `_apply_glosses`'s verbatim-once/length-ratio check) are
+  unchanged and still gate every applied edit regardless of what the rule
+  says -- a rule can bias *which* edits the model proposes, not bypass how
+  they're validated once proposed.
+- GUI: one `ttk.Entry` in the AI 설정 tab under the feature checkboxes,
+  bound to `self.ai_custom_rule` -- created automatically by the existing
+  generic `Preferences` loop (any new string field becomes a `StringVar`,
+  gets the autosave trace, and round-trips through `settings.json` with no
+  extra code), same as every other text preference. `_finalize_command()`
+  passes `--ai-custom-rule` only when the stripped value is non-empty.
+  CLI: `--ai-custom-rule` threaded into the same `AIOptions(...)`
+  construction as the other six flags.
+- Tests: `test_ai_enhance.py` checks the rule text reaches the provider's
+  `instructions`, that a blank/whitespace-only rule changes nothing, and
+  that an oversized rule gets clipped. `test_cli.py` checks the flag
+  reaches `ai_enhancer.options.custom_rule`. `test_gui.py` checks the
+  Preferences round-trip, that the flag is only added when set, and that
+  it's omitted when blank. 279 tests total.
+- Deployed: full PyInstaller rebuild (`gui.py` changed) synced into
+  `dist/Scan2Read`; confirmed `ai_custom_rule` present in the frozen exe's
+  `scan2read.gui` bytecode, `app/scan2read` still hashes identical to
+  `src`, and the rebuilt exe launches and stays responsive. Installer left
+  untouched, per standing instruction (last built 2026-09-10 for the
+  GitHub release; this change didn't warrant an unsolicited rebuild of it).
+- Not verified against a real API: whether models actually follow an
+  arbitrary custom rule well (ignore it, over-apply it) is unmeasured --
+  same caveat as the glosses feature before it, tracked in
+  `CURRENT_SPEC.md`'s limitations list.
+
 ## 2026-09-10
 
 ### Published to GitHub, docs split into user-facing vs. developer-facing
