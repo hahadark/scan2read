@@ -14,7 +14,7 @@ from tkinter import ttk, filedialog, messagebox
 from scan2read.project.batch import Preferences, plan_outputs
 from scan2read.project.credentials import load_api_key, save_api_key
 from scan2read.cleanup.ai_providers import default_model, models_for, resolve_model
-from scan2read.cleanup.ai_usage import FEATURE_LABELS, estimate_book_usage
+from scan2read.cleanup.ai_usage import FEATURE_LABELS, estimate_book_usage, estimate_epub_edit_usage
 
 _PROVIDER_LABELS = {"openai": "OpenAI", "anthropic": "Claude (Anthropic)", "google": "Gemini (Google)"}
 _PROVIDER_NAMES = {label: key for key, label in _PROVIDER_LABELS.items()}
@@ -191,8 +191,11 @@ class Application:
         self.ai_progress_status=tk.StringVar(value="")
         self.epub_source=tk.StringVar()
         self.epub_status=tk.StringVar(value="EPUB 파일과 규칙을 넣고 '변경 제안 받기'를 누르세요.")
+        self.epub_estimate_status=tk.StringVar(value="예상 사용량: EPUB을 선택하면 계산합니다.")
+        self.epub_usage_status=tk.StringVar(value="실제 사용: 아직 없음")
         self.epub_process=None
         self.epub_changes=[]
+        self.epub_stats=None
         self._epub_saving=False
         self.gpu_name=None
         self.gpu_installed=False
@@ -299,6 +302,10 @@ class Application:
         ttk.Label(ai_row,text="모델").pack(side="left",padx=(8,4))
         self.model_combo=ttk.Combobox(ai_row,textvariable=self.ai_model,width=22)
         self.model_combo.pack(side="left");self.edit_controls.append((self.model_combo,"normal"))
+        # Both tabs offer the same model picker over the same variables, so a
+        # change on either is immediately the other's too; _refresh_model_choices
+        # fills every registered combo.
+        self.model_combos=[self.model_combo]
         self._refresh_model_choices()
         ai_key_row=ttk.Frame(tab_ai);ai_key_row.pack(fill="x",pady=2)
         ttk.Label(ai_key_row,text="API 키").pack(side="left")
@@ -343,8 +350,23 @@ class Application:
         # EPUB 편집: already-built EPUB in, rule in, preview, then a new file
         # out. Shares the provider/model/key widgets on the AI tab; the source
         # EPUB is never written to.
-        ttk.Label(tab_epub,text="이미 만들어진 EPUB을 규칙대로 고칩니다. 원본은 그대로 두고 새 파일로 저장합니다.",
+        ttk.Label(tab_epub,text="이미 만들어진 EPUB을 규칙대로 고칩니다. 원본은 그대로 두고 새 파일로 저장합니다. "
+                                "EPUB 파일을 창에 끌어다 놓아도 됩니다.",
                   foreground="#555",wraplength=self._px(760)).pack(anchor="w")
+        epub_ai_row=ttk.Frame(tab_epub);epub_ai_row.pack(fill="x",pady=(6,0))
+        ttk.Label(epub_ai_row,text="제공자").pack(side="left")
+        epub_provider=ttk.Combobox(epub_ai_row,textvariable=self.ai_provider_display,
+            values=list(_PROVIDER_LABELS.values()),width=16,state="readonly")
+        epub_provider.pack(side="left",padx=(4,0));self.edit_controls.append((epub_provider,"readonly"))
+        ttk.Label(epub_ai_row,text="모델").pack(side="left",padx=(8,4))
+        epub_model=ttk.Combobox(epub_ai_row,textvariable=self.ai_model,width=22)
+        epub_model.pack(side="left");self.edit_controls.append((epub_model,"normal"))
+        self.model_combos.append(epub_model)
+        epub_check=ttk.Button(epub_ai_row,text="연결 확인",command=self.check_api_connection)
+        epub_check.pack(side="left",padx=(8,0));self.edit_controls.append((epub_check,"normal"))
+        ttk.Label(tab_epub,textvariable=self.api_status,foreground="#555").pack(anchor="w")
+        ttk.Label(tab_epub,textvariable=self.model_verified_status,foreground="#555",
+                  wraplength=self._px(760)).pack(anchor="w")
         epub_row=ttk.Frame(tab_epub);epub_row.pack(fill="x",pady=6)
         ttk.Label(epub_row,text="EPUB 파일").pack(side="left")
         entry=ttk.Entry(epub_row,textvariable=self.epub_source)
@@ -375,8 +397,12 @@ class Application:
         epub_scroll=ttk.Scrollbar(epub_table,orient="vertical",command=self.epub_changes_list.yview)
         self.epub_changes_list.configure(yscrollcommand=epub_scroll.set)
         self.epub_changes_list.pack(side="left",fill="both",expand=True);epub_scroll.pack(side="right",fill="y")
-        ttk.Label(tab_epub,textvariable=self.epub_status,foreground="#315a8a",
+        ttk.Label(tab_epub,textvariable=self.epub_estimate_status,foreground="#315a8a",
                   wraplength=self._px(760)).pack(anchor="w",pady=(6,0))
+        ttk.Label(tab_epub,textvariable=self.epub_usage_status,foreground="#315a8a",
+                  wraplength=self._px(760)).pack(anchor="w")
+        ttk.Label(tab_epub,textvariable=self.epub_status,foreground="#315a8a",
+                  wraplength=self._px(760)).pack(anchor="w")
 
         self.gpu_frame=ttk.Frame(tab_settings);self.gpu_frame.pack(fill="x",pady=(8,8))
         threading.Thread(target=self._check_gpu_status,daemon=True).start()
@@ -400,6 +426,8 @@ class Application:
             getattr(self,key).trace_add("write",self._settings_changed)
         self.api_key.trace_add("write",self._api_key_changed)
         self.ai_model.trace_add("write",self._model_verified_changed)
+        self.ai_cost_limit_usd.trace_add("write",
+            lambda *_: self._refresh_epub_estimate() if self.epub_stats else None)
         self._model_verified_changed()
 
 
@@ -435,7 +463,8 @@ class Application:
     def _refresh_model_choices(self):
         provider=self.ai_provider.get()
         specs=models_for(provider)
-        self.model_combo["values"]=[spec.model for spec in specs]
+        for combo in getattr(self,"model_combos",[self.model_combo]):
+            combo["values"]=[spec.model for spec in specs]
         if specs and self.ai_model.get() not in [spec.model for spec in specs]:
             self.ai_model.set(default_model(provider) or specs[0].model)
 
@@ -445,6 +474,8 @@ class Application:
         self.model_verified_status.set(
             rate if spec.verified else
             f"⚠ 목록에 없는 모델 — 요금을 몰라 이 제공자의 가장 비싼 모델 기준({rate})으로 비용을 추정합니다.")
+        # The EPUB estimate is priced with this model, so it has to follow it.
+        if getattr(self,"epub_stats",None):self._refresh_epub_estimate()
         self.model_status_label.configure(foreground="#555" if spec.verified else "#b5651d")
 
     def check_api_connection(self):
@@ -493,9 +524,20 @@ class Application:
 
     def _on_drop(self,event):
         if self.active or self.in_batch:return
-        paths=pdfs_from_inputs(parse_dropped_paths(event.data))
+        dropped=parse_dropped_paths(event.data)
+        # A dropped .epub is unambiguous: nothing else in this app takes one,
+        # so it goes to the EPUB 편집 tab rather than being rejected as "not a PDF".
+        epubs=[path for path in dropped if Path(path).suffix.lower()==".epub" and Path(path).is_file()]
+        if epubs:
+            if self.epub_process is not None:
+                messagebox.showerror("EPUB 편집","이전 작업이 끝난 뒤에 다시 시도하세요.");return
+            self.set_epub_source(epubs[0])
+            extra=f" (첫 번째 파일만 사용, {len(epubs)}개 중)" if len(epubs)>1 else ""
+            self.epub_status.set(f"{Path(epubs[0]).name}을(를) 불러왔습니다{extra}. 규칙을 입력하세요.")
+            return
+        paths=pdfs_from_inputs(dropped)
         if not paths:
-            messagebox.showerror("파일 확인","PDF 파일 또는 PDF가 있는 폴더를 끌어다 놓으세요.");return
+            messagebox.showerror("파일 확인","PDF 파일·폴더 또는 EPUB 파일을 끌어다 놓으세요.");return
         before=len(self.queue)
         self._set_sources(paths)
         added=len(self.queue)-before
@@ -636,9 +678,44 @@ class Application:
 
     def choose_epub(self):
         path=filedialog.askopenfilename(title="편집할 EPUB 선택",filetypes=[("EPUB","*.epub")])
-        if path:
-            self.epub_source.set(path)
-            self._clear_epub_changes()
+        if path:self.set_epub_source(path)
+
+    def set_epub_source(self,path):
+        self.epub_source.set(str(path))
+        self._clear_epub_changes()
+        self.epub_stats=None
+        self.epub_usage_status.set("실제 사용: 아직 없음")
+        self.epub_estimate_status.set("예상 사용량: EPUB을 읽는 중…")
+        threading.Thread(target=self._inspect_epub,args=(str(path),),daemon=True).start()
+
+    def _inspect_epub(self,path):
+        """Counting blocks happens in the same runtime the editor subprocess
+        uses, not in the GUI process -- the preview's block indices have to
+        come from exactly the code that will later apply them."""
+        root,python=self._runtime_python()
+        env=os.environ.copy();env["PYTHONUTF8"]="1"
+        env["PYTHONPATH"]=str(root/"app") if (root/"app").exists() else str(root/"src")
+        try:
+            result=subprocess.run([str(python),"-m","scan2read","inspect-epub",path],
+                capture_output=True,text=True,encoding="utf-8",errors="replace",env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0,timeout=60)
+            stats=json.loads(result.stdout) if result.returncode==0 else None
+        except (OSError,subprocess.TimeoutExpired,ValueError):
+            stats=None
+        self.events.put(("epub-stats",(path,stats)))
+
+    def _refresh_epub_estimate(self):
+        if not self.epub_stats:
+            self.epub_estimate_status.set("예상 사용량: EPUB을 읽지 못했습니다.");return
+        blocks=int(self.epub_stats.get("blocks",0))
+        characters=int(self.epub_stats.get("characters",0))
+        model=resolve_model(self.ai_provider.get(),self.ai_model.get())
+        estimate=estimate_epub_edit_usage(blocks,characters,model=model)
+        limit=self.ai_cost_limit_usd.get().strip()
+        limit_text=f" · 설정 한도 ${float(limit):.2f}" if limit and self._valid_cost_limit(limit) else " · 한도 없음"
+        self.epub_estimate_status.set(
+            f"문단 {blocks:,}개 · {characters:,}자 · 예상 입력 {estimate.input_tokens:,} 토큰 · "
+            f"예상 최대 ${estimate.maximum_cost_usd:.4f}{limit_text}")
 
     def _clear_epub_changes(self):
         self.epub_changes=[]
@@ -1071,6 +1148,11 @@ class Application:
                 else:
                     self.gpu_install_button.configure(state="normal",text="GPU 가속 다운로드 (~2GB)")
                     self.status.set("GPU 가속 설치에 실패했습니다. 아래 로그를 확인하세요.")
+            elif kind=="epub-stats":
+                path,stats=value
+                if path!=self.epub_source.get():continue
+                self.epub_stats=stats
+                self._refresh_epub_estimate()
             elif kind=="epub-log":
                 self._handle_epub_log(value)
             elif kind=="epub-done":
@@ -1103,11 +1185,11 @@ class Application:
                 self.epub_status.set(f"비용 한도에 걸려 일부만 검토했습니다 (문단 {plan.get('blocks',0)}개 중 일부).")
             return
         if line.startswith("SCAN2READ_AI_USAGE "):
-            try:self._show_ai_usage(self.epub_source.get(),json.loads(line.partition(" ")[2]))
+            try:self._show_epub_usage(json.loads(line.partition(" ")[2]))
             except (ValueError,TypeError):pass
             return
         if line.startswith("SCAN2READ_AI_PROGRESS "):
-            try:self._show_ai_progress(json.loads(line.partition(" ")[2]))
+            try:self._show_epub_progress(json.loads(line.partition(" ")[2]))
             except (ValueError,TypeError):pass
             return
         self.log.configure(state="normal");self.log.insert("end",f"[EPUB 편집] {line}")
@@ -1188,6 +1270,19 @@ class Application:
         self.job_queue=[]
         self.in_batch=False;self._lock_controls(False)
         self.status.set("배치를 중단했습니다. 완료된 OCR은 재개할 때 재사용합니다.")
+
+    def _show_epub_usage(self,snapshot):
+        cost=snapshot.get("cost_usd",0)
+        limit=" · 한도 도달, 여기까지만 검토했습니다" if snapshot.get("limit_reached") else ""
+        self.epub_usage_status.set(
+            f"실제 사용: 입력 {snapshot.get('input_tokens',0):,} · 출력 {snapshot.get('output_tokens',0):,} 토큰 · "
+            f"${cost:.4f}{limit}")
+
+    def _show_epub_progress(self,snapshot):
+        completed=snapshot.get("completed_batches",0);total=snapshot.get("total_batches",0)
+        remaining=snapshot.get("estimated_remaining_seconds")
+        tail=f" · 예상 남은 시간 {int(remaining)}초" if isinstance(remaining,(int,float)) else ""
+        self.epub_status.set(f"검토 중… 묶음 {completed}/{total}{tail}")
 
     def _show_ai_usage(self,source,snapshot):
         self.current_ai_usage[source]=snapshot

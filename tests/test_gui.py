@@ -282,6 +282,48 @@ class GuiTests(unittest.TestCase):
         self.assertNotIn('api_key',saved)
         self.app.active={};self.app.in_batch=False
 
+    def test_epub_estimate_reports_size_and_worst_case_cost(self):
+        self.app.epub_source.set('book.epub')
+        self.app.epub_stats={'blocks':1200,'characters':480000,'documents':3}
+        self.app.ai_cost_limit_usd.set('2.00')
+        self.app._refresh_epub_estimate()
+        text=self.app.epub_estimate_status.get()
+        self.assertIn('1,200',text);self.assertIn('480,000',text);self.assertIn('$2.00',text)
+
+    def test_epub_estimate_follows_the_selected_model(self):
+        self.app.epub_source.set('book.epub')
+        self.app.epub_stats={'blocks':1000,'characters':400000,'documents':1}
+        self.app.ai_model.set('gpt-5.6-luna');self.app._refresh_epub_estimate()
+        cheap=self.app.epub_estimate_status.get()
+        self.app.ai_model.set('gpt-5.6-terra');self.app._refresh_epub_estimate()
+        self.assertNotEqual(cheap,self.app.epub_estimate_status.get())
+
+    def test_epub_usage_line_reports_tokens_and_cost(self):
+        self.app._show_epub_usage({'input_tokens':12345,'output_tokens':678,
+                                    'cost_usd':0.0432,'limit_reached':True})
+        text=self.app.epub_usage_status.get()
+        self.assertIn('12,345',text);self.assertIn('$0.0432',text);self.assertIn('한도',text)
+
+    def test_model_choices_fill_every_tab_that_offers_them(self):
+        self.assertGreaterEqual(len(self.app.model_combos),2)
+        self.app.ai_provider.set('anthropic');self.app._refresh_model_choices()
+        values=[tuple(combo['values']) for combo in self.app.model_combos]
+        self.assertEqual(len(set(values)),1)
+        self.assertIn('claude-sonnet-5',values[0])
+
+    def test_dropping_an_epub_loads_it_into_the_epub_tab(self):
+        epub=Path(self.temp.name)/'dropped.epub';epub.write_bytes(b'x')
+        with patch.object(self.app,'_inspect_epub'):
+            self.app._on_drop(Mock(data=str(epub)))
+        self.assertEqual(self.app.epub_source.get(),str(epub))
+        self.assertEqual(self.app.queue,[])  # must not land in the conversion queue
+
+    def test_dropping_a_pdf_still_goes_to_the_conversion_queue(self):
+        pdf=Path(self.temp.name)/'dropped.pdf';pdf.write_bytes(b'%PDF-1.4')
+        self.app._on_drop(Mock(data=str(pdf)))
+        self.assertEqual(len(self.app.queue),1)
+        self.assertEqual(self.app.epub_source.get(),'')
+
     def test_epub_plan_requires_a_file_a_rule_and_a_key(self):
         with patch('scan2read.gui.messagebox.showerror') as error, \
              patch('scan2read.gui.subprocess.Popen') as popen:

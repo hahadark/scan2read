@@ -325,6 +325,21 @@ class EditEpubCommandTests(unittest.TestCase):
         self.assertEqual([block.text for block in read_blocks(target)],
                          ["책", "첫 문단을 고쳤습니다.", "셋째 문단입니다."])
 
+    def test_inspect_epub_counts_blocks_without_any_api_call(self):
+        buffer = StringIO()
+        with redirect_stdout(buffer):
+            code = main(["inspect-epub", str(self.source)])
+        self.assertEqual(code, 0)
+        summary = json.loads(buffer.getvalue())
+        self.assertEqual(summary["blocks"], 4)  # title + three paragraphs
+        self.assertGreater(summary["characters"], 0)
+        self.assertEqual(summary["documents"], 1)
+
+    def test_inspect_epub_on_a_non_epub_fails_cleanly(self):
+        broken = self.root / "broken.epub"
+        broken.write_bytes(b"not a zip at all")
+        self.assertEqual(main(["inspect-epub", str(broken)]), 1)
+
     def test_refuses_to_overwrite_the_source(self):
         plan = self._plan_with([])
         code = main(["edit-epub", str(self.source), "--apply-plan", str(plan),

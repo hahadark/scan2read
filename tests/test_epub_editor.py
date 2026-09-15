@@ -70,6 +70,15 @@ class EpubEditorTests(unittest.TestCase):
         self.assertEqual([block.text for block in read_blocks(source)], ["제목", "진짜 문단"])
 
 
+    def test_a_file_that_is_not_an_epub_raises_a_clear_error(self):
+        broken = self.directory / "broken.epub"
+        broken.write_bytes(b"not a zip at all")
+        with self.assertRaises(ValueError):
+            read_blocks(broken)
+        with self.assertRaises(ValueError):
+            write_edited(broken, self.directory / "out.epub", {})
+
+
 class BlockTests(unittest.TestCase):
     def test_key_identifies_document_and_position(self):
         self.assertEqual(Block("EPUB/a.xhtml", 3, "text").key, ("EPUB/a.xhtml", 3))

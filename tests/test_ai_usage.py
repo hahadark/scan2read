@@ -1,7 +1,8 @@
 import unittest
 
 from scan2read.cleanup.ai_providers import MODELS
-from scan2read.cleanup.ai_usage import AICostBudget, estimate_book_usage, token_cost
+from scan2read.cleanup.ai_usage import (AICostBudget, estimate_book_usage,
+                                        estimate_epub_edit_usage, token_cost)
 
 
 class AIUsageTests(unittest.TestCase):
@@ -61,3 +62,18 @@ class AIUsageTests(unittest.TestCase):
     def test_unlimited_budget_reserve_never_blocks(self):
         budget=AICostBudget(None)
         self.assertEqual(budget.reserve("x",100000,("spacing",)),0.0)
+
+    def test_epub_edit_estimate_scales_with_the_book(self):
+        small=estimate_epub_edit_usage(100,40_000)
+        large=estimate_epub_edit_usage(1_000,400_000)
+        self.assertGreater(large.input_tokens,small.input_tokens)
+        self.assertGreater(large.maximum_cost_usd,small.maximum_cost_usd)
+
+    def test_epub_edit_estimate_is_zero_for_an_empty_book(self):
+        estimate=estimate_epub_edit_usage(0,0)
+        self.assertEqual((estimate.input_tokens,estimate.output_tokens,estimate.maximum_cost_usd),(0,0,0.0))
+
+    def test_epub_edit_worst_case_exceeds_the_typical_output(self):
+        estimate=estimate_epub_edit_usage(500,200_000)
+        self.assertGreater(estimate.maximum_cost_usd,
+                            token_cost(estimate.input_tokens,estimate.output_tokens))

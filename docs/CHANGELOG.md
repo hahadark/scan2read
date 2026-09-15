@@ -17,6 +17,38 @@ findings and rejected approaches, which those reference docs don't carry.
 
 ## 2026-09-15
 
+### Follow-up: the EPUB tab now shows its own AI state, and takes dropped files
+
+"epub편집탭도 ai로 하는거라면 그것과 관련한 정보를 출력해줘 / api연결이라던가 모델
+선택이나 사용량 같은거 / epub파일을 드래그앤드롭으로 추가할 수 있게도 해줘". Fair --
+the tab spent money through an API whose connection state, model, and cost
+were only visible on a different tab.
+
+- Provider and model combos on the EPUB tab bound to the *same* variables
+  as the AI tab, so either one changes both. `_refresh_model_choices()`
+  now fills every registered combo (`self.model_combos`) rather than the
+  one it knew about.
+- Connection-check button, API status, and the selected model's rate line,
+  all reusing the existing variables, plus per-run progress (batch
+  n/total, estimated time left) and real token/cost usage on completion.
+- A pre-run estimate: selecting a file reports block count, character
+  count, and worst-case cost, and re-prices itself when the model or the
+  cost limit changes. Added `estimate_epub_edit_usage()` -- much simpler
+  to estimate than conversion, since there is no pre-filter and the whole
+  book is sent; worst case is every block coming back rewritten.
+- The block count comes from a new `inspect-epub` subcommand run as a
+  subprocess, not from importing the parser into the GUI. The preview's
+  block indices have to come from the same runtime that will later apply
+  them, and the frozen GUI copy can drift from `app/scan2read` between
+  builds -- exactly the trap documented in CURRENT_SPEC.
+- Drag-and-drop: a dropped `.epub` goes to the EPUB tab instead of being
+  rejected as "not a PDF". Unambiguous, since nothing else here takes one.
+- **A test caught an unhandled-crash path**: `BadZipFile` is not an
+  `OSError`, so a renamed or truncated file (exactly what drag-and-drop
+  invites) escaped every handler and surfaced as a raw traceback. Both
+  entry points into `editor.py` now open through one helper that
+  re-raises it as a `ValueError` with a readable message. 322 tests.
+
 ### EPUB rule editing: a second, deliberately different AI path
 
 "Epub 파일을 AI상으로 업로드하고 규칙을 자연어로 넣어서 수정하도록 해줘 / 이건

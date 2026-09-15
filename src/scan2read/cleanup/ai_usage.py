@@ -43,6 +43,30 @@ class UsageEstimate:
     maximum_cost_usd: float
 
 
+def estimate_epub_edit_usage(block_count: int, character_count: int,
+                             model: ModelSpec = MODELS[DEFAULT_MODEL_KEY]) -> UsageEstimate:
+    """Estimate one rule-editing pass over an existing EPUB.
+
+    Unlike conversion there is no local pre-filter to thin the volume out --
+    a rule can apply anywhere, so every block is sent. That makes this both
+    more expensive and much easier to estimate: the input is simply the whole
+    book, and the worst case is the model returning a rewrite of all of it.
+    """
+    blocks = max(0, int(block_count))
+    characters = max(0, int(character_count))
+    if not blocks:
+        return UsageEstimate(0, 0, 0.0)
+    # Korean runs about 3 UTF-8 bytes per character; the JSON framing and the
+    # instructions repeat per batch.
+    input_tokens = characters * 3 + blocks * 40 + 800 * max(1, blocks // 16)
+    # Typical: most blocks come back as a bare "keep". Worst case: every block
+    # is returned rewritten in full.
+    output_tokens = blocks * 25
+    maximum_output_tokens = characters * 3 + blocks * 40
+    maximum = token_cost(math.ceil(input_tokens * 1.35), maximum_output_tokens, model=model)
+    return UsageEstimate(input_tokens, output_tokens, maximum)
+
+
 def estimate_book_usage(page_count: int, features: Iterable[str],
                          model: ModelSpec = MODELS[DEFAULT_MODEL_KEY]) -> UsageEstimate:
     """Give a conservative pre-OCR estimate for an ordinary Korean printed page."""

@@ -172,6 +172,9 @@ def main(argv: list[str] | None = None) -> int:
                                help="Reuse a page's own embedded PDF text instead of OCR when present (default: auto)")
     ocr_pages_cmd.add_argument("--pages", type=parse_page_range, required=True,
                                help="Page range to OCR, e.g. 30-50 (1-based, inclusive)")
+    inspect_epub = commands.add_parser("inspect-epub",
+        help="Report how many editable text blocks an EPUB has, without calling any API")
+    inspect_epub.add_argument("file", type=Path)
     edit_cmd = commands.add_parser("edit-epub",
         help="Edit an existing EPUB with one natural-language rule, in two steps: plan, then apply")
     edit_cmd.add_argument("file", type=Path)
@@ -214,6 +217,18 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, RuntimeError, OSError, ImportError) as exc:
             logging.error("%s", exc, exc_info=args.debug)
             return 1
+        return 0
+    if args.command == "inspect-epub":
+        from scan2read.epub.editor import read_blocks
+        try:
+            blocks = read_blocks(args.file)
+        except (OSError, ValueError) as exc:
+            logging.error("%s", exc, exc_info=args.debug)
+            return 1
+        print(json.dumps({"blocks": len(blocks),
+                          "characters": sum(len(block.text) for block in blocks),
+                          "documents": len({block.document for block in blocks})},
+                         ensure_ascii=False))
         return 0
     if args.command == "edit-epub":
         return _edit_epub(args)

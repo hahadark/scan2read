@@ -14,7 +14,7 @@ from html.entities import html5
 from pathlib import Path
 import re
 from xml.etree import ElementTree as ET
-from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
+from zipfile import BadZipFile, ZipFile, ZIP_DEFLATED, ZIP_STORED
 
 XHTML = "http://www.w3.org/1999/xhtml"
 _OPF = "http://www.idpf.org/2007/opf"
@@ -98,10 +98,23 @@ def _content_documents(archive: ZipFile) -> list[str]:
     return documents
 
 
+def _open(path: Path) -> ZipFile:
+    """An EPUB is a zip; anything else is a clear user error, not a crash.
+
+    BadZipFile is not an OSError, so without this every caller would have to
+    know about it separately -- and a renamed or truncated file is exactly
+    what a drag-and-drop target gets handed.
+    """
+    try:
+        return ZipFile(path)
+    except BadZipFile as exc:
+        raise ValueError(f"EPUB 파일이 아니거나 손상되었습니다: {path}") from exc
+
+
 def read_blocks(path: Path) -> list[Block]:
     """Every editable text block in the book, in reading order."""
     blocks = []
-    with ZipFile(path) as archive:
+    with _open(path) as archive:
         for member in _content_documents(archive):
             try:
                 root = _parse(archive.read(member).decode("utf-8"))
@@ -148,7 +161,7 @@ def write_edited(source: Path, target: Path, changes: dict[tuple[str, int], str 
         by_document.setdefault(document, {})[index] = replacement
     target.parent.mkdir(parents=True, exist_ok=True)
     pending = target.with_suffix(".pending.epub")
-    with ZipFile(source) as original, ZipFile(pending, "w", compression=ZIP_DEFLATED) as archive:
+    with _open(source) as original, ZipFile(pending, "w", compression=ZIP_DEFLATED) as archive:
         names = original.namelist()
         if "mimetype" in names:
             # Must be the first member and stored uncompressed for the file to
