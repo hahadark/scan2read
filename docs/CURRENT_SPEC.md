@@ -52,7 +52,12 @@ OCR은 페이지별로 캐시되며 중단 후 같은 입력과 설정으로 실
 - 마지막 설정 저장
 - 제공자별 API 키 연결 확인과 Windows DPAPI 암호화 저장(제공자마다 독립적인 키)
 - 화면은 "변환"(파일 목록·시작/중단·로그) · "변환 설정"(출력·보정 옵션·GPU·동시 처리 개수) ·
-  "AI 설정"(제공자·모델·키·기능·비용) 3개 탭으로 나뉜다
+  "AI 설정"(제공자·모델·키·기능·비용) · "EPUB 편집" 4개 탭으로 나뉜다
+- "EPUB 편집" 탭은 변환 파이프라인과 무관한 별도 기능이다. 이미 있는 EPUB에 자연어 규칙
+  하나를 적용해 문단을 고치거나 지우며, **제안 → 사람이 미리보기에서 제외 → 새 파일로 저장**
+  2단계로 동작한다. 원본은 어떤 경우에도 덮어쓰지 않는다. 제공자·모델·키·비용 한도는 AI
+  설정 탭 값을 공유하되, "AI 기능 전체 사용" 스위치와는 독립이다(`_subprocess_env
+  (with_api_key=True)`).
 
 AI는 `AI 기능 전체 사용`을 마스터 스위치로 사용하며 아래 기능을 각각 켜고 끌 수 있다.
 
@@ -516,7 +521,11 @@ $env:PYTHONPATH = "src"
 .\.tools\paddle-env\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 ```
 
-2026-09-15 현재 286개 통과, 실제 외부 OCR 환경 테스트 1개는 환경변수가 없으면 건너뛴다.
+2026-09-15 현재 310개 통과, 실제 외부 OCR 환경 테스트 1개는 환경변수가 없으면 건너뛴다.
+`tests/test_epub_editor.py`가 EPUB 읽기/쓰기(편집 대상 외 zip 멤버 바이트 동일, 원본 불변,
+HTML 엔티티 처리)를, `tests/test_ai_edit.py`가 규칙 편집 제안(keep/replace/delete 해석,
+동일 내용 교체는 변경 아님, 비용 한도·연결 실패·응답 불일치 처리)을, `tests/test_cli.py`의
+`EditEpubCommandTests`가 계획/적용 2단계 분리와 원본 덮어쓰기 거부를 검사한다.
 `tests/test_ai_usage.py`가 단가, 캐시 입력 비용, 기능별 무중복 배분, 호출 전 비용 차단과
 변환 전 추정치를 검사하고, `tests/test_ai_providers.py`가 OpenAI/Anthropic/Google 세
 제공자의 요청 형식과 응답 파싱을 검사한다. `tests/test_pipeline.py`의 `OcrOnlyTests`가
@@ -534,10 +543,11 @@ $env:PYTHONPATH = "src"
 C:\Users\Administrator\Documents\PDF to tts\build\Scan2Read\Scan2Read.exe
 ```
 
-이 실행 파일은 2026-09-15 21:50에 "사용자 지정 규칙"과 "도식·그림 잔재 삭제" 반영본으로
-다시 빌드했고(`--distpath build/launcher` → `dist/Scan2Read` 동기화), exe 바이트코드 안에
-`ai_custom_rule`/`ai_figures`가 실제로 들어있는지, `app/scan2read`가 `src`와 해시까지
-동일한지 확인한 뒤 실행 파일을 띄워 정상 응답하는 것까지 확인했다.
+이 실행 파일은 2026-09-15에 "사용자 지정 규칙" · "도식·그림 잔재 삭제" · "EPUB 편집" 탭까지
+반영해 다시 빌드했고(`--distpath build/launcher` → `dist/Scan2Read` 동기화), exe 바이트코드
+안에 `ai_custom_rule`/`ai_figures`/`start_epub_plan`/`save_edited_epub`이 실제로 들어있는지,
+`app/scan2read`가 `src`와 해시까지 동일한지 확인한 뒤 실행 파일을 띄워 정상 응답하는 것까지
+확인했다.
 
 참고로 이 exe의 PYZ에 실제로 박제되는 `scan2read` 모듈은 `gui`, `cleanup.ai_providers`,
 `cleanup.ai_usage`, `project.batch`, `project.credentials`뿐이다(GUI가 임포트하는 것만).
@@ -589,6 +599,10 @@ GUI 실행 파일을 다시 만들 때는 `docs/CHANGELOG.md`의 `Process notes 
 - "괄호·음역 중복 표현 삭제"는 실제 API 호출로 검증하지 않고 가짜 transport 단위
   테스트로만 확인했다 — AI가 문맥을 얼마나 정확히 판단하는지(과다 삭제·과소 삭제)는
   실제 책으로 확인이 필요하다.
+- "EPUB 편집"은 실제 API 호출로 검증하지 않았다. 편집 결과 EPUB이 EPUBCheck를 통과하는
+  것은 확인했지만(합성 EPUB 기준), 실제 모델이 규칙을 얼마나 정확히 따르는지, 실제 책
+  분량에서 비용이 얼마나 나오는지는 확인하지 않았다. 또 AI가 고친 문단은 그 안의 인라인
+  서식(`<em>`, `<a>`)이 사라진다 — 손대지 않은 문단은 보존된다.
 - "사용자 지정 규칙"도 가짜 transport 단위 테스트로만 확인했다 — 실제 모델이 자유
   텍스트 지침을 얼마나 잘 따르는지(무시하거나 과잉 적용하는 정도)는 검증하지 않았다.
   규칙이 다른 6개 기능의 스키마·검증 로직 자체를 바꾸지는 않으므로 최악의 경우도

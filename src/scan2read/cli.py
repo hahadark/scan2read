@@ -53,6 +53,66 @@ def _build_engine(args: argparse.Namespace):
     return engine, identity
 
 
+def _edit_epub(args) -> int:
+    """Two separate invocations by design: planning costs money and needs a
+    human to review it, applying is free and deterministic. Keeping them apart
+    is what lets the GUI show a preview between the two."""
+    from scan2read.cleanup.ai_edit import Change
+    from scan2read.epub.editor import read_blocks, write_edited
+    try:
+        if args.apply_plan:
+            if args.output is None:
+                raise ValueError("--apply-plan requires --output")
+            if args.output.resolve() == args.file.resolve():
+                raise ValueError("--output must differ from the source EPUB")
+            plan = [Change.from_dict(item)
+                    for item in json.loads(args.apply_plan.read_text(encoding="utf-8"))]
+            changes = {(change.document, change.index): change.after for change in plan}
+            write_edited(args.file, args.output, changes)
+            print(f"SCAN2READ_EPUB_SAVED {json.dumps({'output': str(args.output), 'applied': len(plan)}, ensure_ascii=False)}",
+                  flush=True)
+            return 0
+        if not args.rule.strip():
+            raise ValueError("--rule is required when planning")
+        if args.plan is None:
+            raise ValueError("--plan PATH is required when planning")
+        env_var = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+                   "google": "GOOGLE_API_KEY"}[args.ai_provider]
+        api_key = os.environ.get(env_var, "").strip()
+        if not api_key:
+            raise ValueError(f"{env_var} is not set")
+        from scan2read.cleanup.ai_edit import EpubRuleEditor
+        from scan2read.cleanup.ai_providers import build_provider, default_model, resolve_model
+        from scan2read.cleanup.ai_usage import AICostBudget
+        model = args.ai_model or default_model(args.ai_provider)
+        if model is None:
+            raise ValueError(f"--ai-model is required for --ai-provider {args.ai_provider}")
+        blocks = read_blocks(args.file)
+        if not blocks:
+            raise ValueError("No editable text found in this EPUB")
+        logging.info("Planning edits for %s blocks", len(blocks))
+        def report_usage(snapshot):
+            print("SCAN2READ_AI_USAGE " + json.dumps(snapshot, ensure_ascii=False), flush=True)
+        def report_progress(snapshot):
+            print("SCAN2READ_AI_PROGRESS " + json.dumps(snapshot, ensure_ascii=False), flush=True)
+        budget = AICostBudget(args.ai_cost_limit_usd, report_usage,
+                              model=resolve_model(args.ai_provider, model))
+        editor = EpubRuleEditor(build_provider(args.ai_provider, model, api_key), args.rule,
+                                budget=budget, progress=report_progress)
+        changes = editor.plan(blocks)
+        args.plan.parent.mkdir(parents=True, exist_ok=True)
+        args.plan.write_text(json.dumps([change.as_dict() for change in changes], ensure_ascii=False),
+                             encoding="utf-8")
+        report_usage(budget.snapshot())
+        print("SCAN2READ_EPUB_PLAN " + json.dumps(
+            {"plan": str(args.plan), "blocks": len(blocks), "changes": len(changes),
+             "stopped_early": editor.disabled}, ensure_ascii=False), flush=True)
+        return 0
+    except (ValueError, OSError, KeyError, json.JSONDecodeError) as exc:
+        logging.error("%s", exc, exc_info=args.debug)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="scan2read")
     parser.add_argument("--version", action="version", version=__version__)
@@ -112,6 +172,19 @@ def main(argv: list[str] | None = None) -> int:
                                help="Reuse a page's own embedded PDF text instead of OCR when present (default: auto)")
     ocr_pages_cmd.add_argument("--pages", type=parse_page_range, required=True,
                                help="Page range to OCR, e.g. 30-50 (1-based, inclusive)")
+    edit_cmd = commands.add_parser("edit-epub",
+        help="Edit an existing EPUB with one natural-language rule, in two steps: plan, then apply")
+    edit_cmd.add_argument("file", type=Path)
+    edit_cmd.add_argument("--rule", default="", help="The rule, in plain language (planning step only)")
+    edit_cmd.add_argument("--plan", type=Path,
+                          help="Write the proposed changes here as JSON and stop, without touching any EPUB")
+    edit_cmd.add_argument("--apply-plan", type=Path,
+                          help="Apply this plan JSON (usually after a human removed entries from it); makes no API calls")
+    edit_cmd.add_argument("--output", type=Path, help="Where to write the edited EPUB (never overwrites the source)")
+    edit_cmd.add_argument("--ai-provider", choices=("openai", "anthropic", "google"), default="openai")
+    edit_cmd.add_argument("--ai-model", default=None)
+    edit_cmd.add_argument("--ai-cost-limit-usd", type=float, default=None,
+                          help="Stop planning before this much is spent")
     gpu_status = commands.add_parser("gpu-status", help="Report NVIDIA GPU presence and paddlepaddle-gpu install state")
     gpu_usage = commands.add_parser("gpu-usage", help="Report current NVIDIA GPU utilization and VRAM usage")
     gpu_install = commands.add_parser("gpu-install", help="Install the CUDA build of paddlepaddle for GPU-accelerated OCR")
@@ -142,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
             logging.error("%s", exc, exc_info=args.debug)
             return 1
         return 0
+    if args.command == "edit-epub":
+        return _edit_epub(args)
     if args.command == "gpu-status":
         from scan2read.ocr.gpu import detect_nvidia_gpu, gpu_paddle_installed
         print(json.dumps({"gpu_name": detect_nvidia_gpu(), "installed": gpu_paddle_installed()}))

@@ -17,6 +17,7 @@ FEATURE_LABELS = {
     "headings": "장·절 구조 및 목차 감지",
     "glosses": "괄호·음역 중복 표현 삭제",
     "figures": "도식·그림 잔재 삭제",
+    "epub_edit": "EPUB 규칙 편집",
 }
 
 

@@ -289,3 +289,66 @@ class CLITests(unittest.TestCase):
                 code = main(["convert", str(source), "--work-dir", str(work), "--epubcheck", str(jar)])
                 self.assertEqual(code, 0)
                 recognize.assert_not_called()
+
+
+class EditEpubCommandTests(unittest.TestCase):
+    """The two steps are separate invocations on purpose: planning costs money
+    and needs review, applying is free and deterministic."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+        from scan2read.epub.builder import build_epub
+        self.source = build_epub(self.root / "book.epub", "책",
+                                 ["첫 문단입니다.", "빼야 할 문단", "셋째 문단입니다."])
+
+    def _plan_with(self, items):
+        from scan2read.cleanup.ai_edit import Change
+        plan = self.root / "plan.json"
+        plan.write_text(json.dumps([Change(*item).as_dict() for item in items], ensure_ascii=False),
+                        encoding="utf-8")
+        return plan
+
+    def test_apply_plan_writes_a_new_epub_and_leaves_the_source_alone(self):
+        from scan2read.epub.editor import read_blocks
+        blocks = read_blocks(self.source)
+        target = self.root / "edited.epub"
+        plan = self._plan_with([
+            (blocks[1].document, blocks[1].index, blocks[1].text, "첫 문단을 고쳤습니다."),
+            (blocks[2].document, blocks[2].index, blocks[2].text, None),
+        ])
+        before = self.source.read_bytes()
+        code = main(["edit-epub", str(self.source), "--apply-plan", str(plan), "--output", str(target)])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.source.read_bytes(), before)
+        self.assertEqual([block.text for block in read_blocks(target)],
+                         ["책", "첫 문단을 고쳤습니다.", "셋째 문단입니다."])
+
+    def test_refuses_to_overwrite_the_source(self):
+        plan = self._plan_with([])
+        code = main(["edit-epub", str(self.source), "--apply-plan", str(plan),
+                     "--output", str(self.source)])
+        self.assertEqual(code, 1)
+
+    def test_planning_without_a_rule_fails(self):
+        self.assertEqual(main(["edit-epub", str(self.source), "--plan", str(self.root / "p.json")]), 1)
+
+    def test_planning_without_an_api_key_fails_rather_than_silently_doing_nothing(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}, clear=False):
+            code = main(["edit-epub", str(self.source), "--rule", "각주를 빼주세요",
+                         "--plan", str(self.root / "p.json")])
+        self.assertEqual(code, 1)
+
+    def test_planning_writes_the_proposed_changes_without_touching_any_epub(self):
+        plan = self.root / "p.json"
+        before = self.source.read_bytes()
+        def fake_plan(self_editor, blocks):
+            from scan2read.cleanup.ai_edit import Change
+            return [Change(blocks[1].document, blocks[1].index, blocks[1].text, None)]
+        with patch("scan2read.cleanup.ai_edit.EpubRuleEditor.plan", new=fake_plan), \
+             patch.dict("os.environ", {"OPENAI_API_KEY": "sk-secret"}, clear=False):
+            code = main(["edit-epub", str(self.source), "--rule", "빼주세요", "--plan", str(plan)])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.source.read_bytes(), before)
+        self.assertEqual(len(json.loads(plan.read_text(encoding="utf-8"))), 1)

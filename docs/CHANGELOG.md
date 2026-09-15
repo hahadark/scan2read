@@ -17,6 +17,60 @@ findings and rejected approaches, which those reference docs don't carry.
 
 ## 2026-09-15
 
+### EPUB rule editing: a second, deliberately different AI path
+
+"Epub 파일을 AI상으로 업로드하고 규칙을 자연어로 넣어서 수정하도록 해줘 / 이건
+pdf변환과 다른거야". A separate feature from conversion: take an EPUB that
+already exists (not necessarily one Scan2Read made), apply one
+plain-language rule, get a new EPUB.
+
+Asked two questions before building, because they decide the shape:
+how much freedom the model gets (answer: free to rewrite and delete, with
+a human-reviewed preview before anything is written), and what to do about
+cost now that there's no pre-filter to cut the volume (answer: send every
+block, bound it with the existing per-book limit).
+
+This inverts the safety model the rest of the project runs on, so the
+safety had to move somewhere else:
+
+- **Nothing is written to the source, ever.** There is no code path that
+  opens the source EPUB for writing; `--output` equal to the source is
+  rejected outright.
+- **Proposing and applying are separate invocations.** `edit-epub --plan`
+  makes the API calls and writes a JSON list of proposed changes,
+  touching no EPUB at all; `edit-epub --apply-plan` applies a plan with no
+  API calls. The GUI puts a preview between them, and the user can delete
+  entries from the list before saving. The plan being an ordinary JSON
+  file is what makes "let a human edit the diff" a two-line feature.
+- `epub/editor.py` is stdlib-only (zipfile + ElementTree), matching
+  builder.py's no-dependency stance. Editable units are block elements
+  with no block-element descendant, so a `<div>` wrapping `<p>`s yields
+  the paragraphs and not both. Every zip member that isn't being edited is
+  copied through byte for byte, and within an edited document only changed
+  elements are touched -- so an untouched paragraph keeps its `<em>`/`<a>`
+  markup. A rewritten one loses its inline markup; that's the documented
+  trade for not trying to diff markup.
+- Practical detail worth keeping: XHTML files routinely contain `&nbsp;`
+  and friends, which are *not* XML entities, so ElementTree refuses the
+  whole file. Entities are expanded to characters before parsing.
+- Verified the output of a real edit (one replacement, one deletion) still
+  passes EPUBCheck, since the edited document gets re-serialised.
+- **A GUI test caught a real bug before it shipped**: `_subprocess_env()`
+  only passed the API key when the "AI 기능 전체 사용" master switch was on.
+  That switch is about PDF conversion features, so EPUB editing -- which
+  is inherently an AI job -- would have silently failed for anyone who
+  hadn't also enabled AI cleanup for conversion. Added an explicit
+  `with_api_key` parameter rather than always passing the key, so a
+  conversion worker that shouldn't be calling an API still isn't handed
+  credentials for one.
+- Tests: `test_epub_editor.py` (reading order, replace/delete, untouched
+  members byte-identical, source unmodified, HTML entities, empty blocks),
+  `test_ai_edit.py` (keep/replace/delete, rule reaches instructions, a
+  no-op "replace" isn't a change, cost limit, malformed batch, connection
+  failure, rule clipping), `EditEpubCommandTests` (the two-step split,
+  refusing to overwrite the source), and GUI cases for the command, the
+  preview exclusion, and the disabled save button. 310 tests total.
+
 ### Dropping figure/diagram residue, the first feature that deletes a whole paragraph
 
 The user converted a real book (부교역자리더십) and opened the result: between

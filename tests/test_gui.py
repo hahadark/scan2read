@@ -282,6 +282,47 @@ class GuiTests(unittest.TestCase):
         self.assertNotIn('api_key',saved)
         self.app.active={};self.app.in_batch=False
 
+    def test_epub_plan_requires_a_file_a_rule_and_a_key(self):
+        with patch('scan2read.gui.messagebox.showerror') as error, \
+             patch('scan2read.gui.subprocess.Popen') as popen:
+            self.app.start_epub_plan()
+            error.assert_called_once();popen.assert_not_called()
+
+    def test_epub_plan_command_carries_the_rule_and_model(self):
+        epub=Path(self.temp.name)/'book.epub';epub.write_bytes(b'not really an epub')
+        self.app.epub_source.set(str(epub));self.app.epub_rule.set('각주 번호는 빼주세요')
+        self.app.api_key.set('sk-test');self.app.ai_cost_limit_usd.set('0.50')
+        with patch('scan2read.gui.subprocess.Popen',return_value=Mock(stdout=iter([]))) as popen:
+            self.app.start_epub_plan()
+            command=popen.call_args.args[0]
+            environment=popen.call_args.kwargs['env']
+        self.assertIn('edit-epub',command)
+        self.assertEqual(command[command.index('--rule')+1],'각주 번호는 빼주세요')
+        self.assertEqual(command[command.index('--ai-cost-limit-usd')+1],'0.50')
+        self.assertIn('--plan',command)
+        self.assertNotIn('--output',command)  # planning must never write an EPUB
+        self.assertNotIn('sk-test',command)
+        self.assertEqual(environment['OPENAI_API_KEY'],'sk-test')
+        self.app.epub_process=None
+
+    def test_excluding_a_proposed_change_drops_it_before_saving(self):
+        self.app._populate_epub_changes([
+            {'document':'EPUB/chapter.xhtml','index':1,'before':'하나','after':None},
+            {'document':'EPUB/chapter.xhtml','index':2,'before':'둘','after':'둘 고침'},
+        ])
+        self.assertEqual(len(self.app.epub_changes_list.get_children()),2)
+        self.app.epub_changes_list.selection_set('0')
+        self.app.exclude_epub_changes()
+        self.assertEqual([change['before'] for change in self.app.epub_changes],['둘'])
+        self.assertEqual(len(self.app.epub_changes_list.get_children()),1)
+
+    def test_no_remaining_changes_disables_saving(self):
+        self.app._populate_epub_changes([
+            {'document':'EPUB/chapter.xhtml','index':1,'before':'하나','after':None}])
+        self.app.epub_changes_list.selection_set('0')
+        self.app.exclude_epub_changes()
+        self.assertEqual(str(self.app.epub_save_button.cget('state')),'disabled')
+
     def test_figures_checkbox_adds_its_flag(self):
         self.add('a.pdf')
         self.app.use_ai_context.set(True);self.app.ai_figures.set(True)

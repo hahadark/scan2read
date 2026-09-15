@@ -189,6 +189,11 @@ class Application:
         self.ai_estimate_status=tk.StringVar(value="AI 예상 사용량: 기능을 켜면 계산합니다.")
         self.ai_usage_status=tk.StringVar(value="실제 사용: 아직 없음")
         self.ai_progress_status=tk.StringVar(value="")
+        self.epub_source=tk.StringVar()
+        self.epub_status=tk.StringVar(value="EPUB 파일과 규칙을 넣고 '변경 제안 받기'를 누르세요.")
+        self.epub_process=None
+        self.epub_changes=[]
+        self._epub_saving=False
         self.gpu_name=None
         self.gpu_installed=False
         self.gpu_process=None
@@ -226,9 +231,11 @@ class Application:
         tab_convert=ttk.Frame(notebook,padding=10)
         tab_settings=ttk.Frame(notebook,padding=10)
         tab_ai=ttk.Frame(notebook,padding=10)
+        tab_epub=ttk.Frame(notebook,padding=10)
         notebook.add(tab_convert,text="변환")
         notebook.add(tab_settings,text="변환 설정")
         notebook.add(tab_ai,text="AI 설정")
+        notebook.add(tab_epub,text="EPUB 편집")
 
         toolbar=ttk.Frame(tab_convert);toolbar.pack(fill="x",pady=8)
         for title,command in [("PDF 추가",self.choose_source),("폴더 추가",self.choose_source_folder),("선택 제거",self.remove_selected),("목록 비우기",self.clear_sources)]:
@@ -332,6 +339,44 @@ class Application:
         ttk.Label(tab_ai,textvariable=self.ai_estimate_status,foreground="#315a8a",wraplength=self._px(760)).pack(anchor="w")
         ttk.Label(tab_ai,textvariable=self.ai_usage_status,foreground="#315a8a",wraplength=self._px(760)).pack(anchor="w")
         ttk.Label(tab_ai,textvariable=self.ai_progress_status,foreground="#315a8a",wraplength=self._px(760)).pack(anchor="w",pady=(1,4))
+
+        # EPUB 편집: already-built EPUB in, rule in, preview, then a new file
+        # out. Shares the provider/model/key widgets on the AI tab; the source
+        # EPUB is never written to.
+        ttk.Label(tab_epub,text="이미 만들어진 EPUB을 규칙대로 고칩니다. 원본은 그대로 두고 새 파일로 저장합니다.",
+                  foreground="#555",wraplength=self._px(760)).pack(anchor="w")
+        epub_row=ttk.Frame(tab_epub);epub_row.pack(fill="x",pady=6)
+        ttk.Label(epub_row,text="EPUB 파일").pack(side="left")
+        entry=ttk.Entry(epub_row,textvariable=self.epub_source)
+        entry.pack(side="left",fill="x",expand=True,padx=8);self.edit_controls.append((entry,"normal"))
+        button=ttk.Button(epub_row,text="파일 선택",command=self.choose_epub)
+        button.pack(side="left");self.edit_controls.append((button,"normal"))
+        rule_frame=ttk.Frame(tab_epub);rule_frame.pack(fill="x",pady=4)
+        ttk.Label(rule_frame,text="수정 규칙").pack(side="left")
+        entry=ttk.Entry(rule_frame,textvariable=self.epub_rule)
+        entry.pack(side="left",fill="x",expand=True,padx=8);self.edit_controls.append((entry,"normal"))
+        ttk.Label(tab_epub,text="예: 각주 번호만 있는 문단은 빼주세요 · 영어 인용문은 통째로 빼주세요 · 장 제목을 '제1장' 형식으로 통일해주세요",
+                  foreground="#555",wraplength=self._px(760)).pack(anchor="w")
+        epub_actions=ttk.Frame(tab_epub);epub_actions.pack(fill="x",pady=6)
+        self.epub_plan_button=ttk.Button(epub_actions,text="변경 제안 받기",command=self.start_epub_plan)
+        self.epub_plan_button.pack(side="left")
+        self.epub_exclude_button=ttk.Button(epub_actions,text="선택 항목 제외",
+            command=self.exclude_epub_changes,state="disabled")
+        self.epub_exclude_button.pack(side="left",padx=8)
+        self.epub_save_button=ttk.Button(epub_actions,text="새 EPUB으로 저장",
+            command=self.save_edited_epub,state="disabled")
+        self.epub_save_button.pack(side="right")
+        epub_table=ttk.Frame(tab_epub);epub_table.pack(fill="both",expand=True)
+        self.epub_changes_list=ttk.Treeview(epub_table,columns=("action","before","after"),
+            show="headings",height=8,selectmode="extended")
+        for key,label,width in [("action","구분",70),("before","이전",330),("after","이후",330)]:
+            self.epub_changes_list.heading(key,text=label)
+            self.epub_changes_list.column(key,width=self._px(width),minwidth=self._px(60))
+        epub_scroll=ttk.Scrollbar(epub_table,orient="vertical",command=self.epub_changes_list.yview)
+        self.epub_changes_list.configure(yscrollcommand=epub_scroll.set)
+        self.epub_changes_list.pack(side="left",fill="both",expand=True);epub_scroll.pack(side="right",fill="y")
+        ttk.Label(tab_epub,textvariable=self.epub_status,foreground="#315a8a",
+                  wraplength=self._px(760)).pack(anchor="w",pady=(6,0))
 
         self.gpu_frame=ttk.Frame(tab_settings);self.gpu_frame.pack(fill="x",pady=(8,8))
         threading.Thread(target=self._check_gpu_status,daemon=True).start()
@@ -584,6 +629,118 @@ class Application:
         if not python.exists():python=root/".tools"/"paddle-env"/"Scripts"/"python.exe"
         return root,python
 
+    # --- EPUB 편집 -------------------------------------------------------
+    # Deliberately a separate flow from the PDF batch scheduler: one file, two
+    # subprocess steps (plan, then apply) with a human looking at the diff in
+    # between, so none of the queue/chunk machinery applies.
+
+    def choose_epub(self):
+        path=filedialog.askopenfilename(title="편집할 EPUB 선택",filetypes=[("EPUB","*.epub")])
+        if path:
+            self.epub_source.set(path)
+            self._clear_epub_changes()
+
+    def _clear_epub_changes(self):
+        self.epub_changes=[]
+        self.epub_changes_list.delete(*self.epub_changes_list.get_children())
+        self.epub_save_button.configure(state="disabled")
+        self.epub_exclude_button.configure(state="disabled")
+
+    def _epub_plan_path(self):
+        work=Path(os.environ.get("LOCALAPPDATA",str(Path.home())))/"Scan2Read"/"work"
+        work.mkdir(parents=True,exist_ok=True)
+        return work/"_epub_edit_plan.json"
+
+    def start_epub_plan(self):
+        source=self.epub_source.get().strip()
+        rule=self.epub_rule.get().strip()
+        if not source or not Path(source).is_file():
+            messagebox.showerror("EPUB 편집","편집할 EPUB 파일을 선택하세요.");return
+        if not rule:
+            messagebox.showerror("EPUB 편집","어떻게 고칠지 규칙을 입력하세요.");return
+        if not self.api_key.get().strip():
+            messagebox.showerror("EPUB 편집","AI 설정 탭에서 API 키를 먼저 입력하세요.");return
+        if self.epub_process is not None:return
+        self._clear_epub_changes()
+        root,python=self._runtime_python()
+        plan=self._epub_plan_path()
+        command=[str(python),"-m","scan2read","edit-epub",str(Path(source).resolve()),
+                 "--rule",rule,"--plan",str(plan),
+                 "--ai-provider",self.ai_provider.get(),"--ai-model",self.ai_model.get()]
+        limit=self.ai_cost_limit_usd.get().strip()
+        if limit and self._valid_cost_limit(limit):command+=["--ai-cost-limit-usd",limit]
+        try:
+            self.epub_process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+                text=True,encoding="utf-8",errors="replace",env=self._subprocess_env(with_api_key=True),
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0)
+        except OSError as exc:
+            messagebox.showerror("EPUB 편집",f"실행하지 못했습니다: {exc}");return
+        self.epub_plan_button.configure(state="disabled")
+        self.epub_status.set("변경할 부분을 AI가 검토하는 중입니다…")
+        threading.Thread(target=self._read_epub_process,args=(self.epub_process,),daemon=True).start()
+
+    def _read_epub_process(self,process):
+        for line in process.stdout:
+            self.events.put(("epub-log",line))
+        self.events.put(("epub-done",process.wait()))
+
+    def _load_epub_plan(self):
+        try:
+            data=json.loads(self._epub_plan_path().read_text(encoding="utf-8"))
+        except (OSError,ValueError):
+            self.epub_status.set("변경 제안을 읽지 못했습니다.");return
+        self._populate_epub_changes(data)
+        if not data:
+            self.epub_status.set("이 규칙으로 바꿀 부분을 찾지 못했습니다.")
+
+    def exclude_epub_changes(self):
+        excluded={int(item) for item in self.epub_changes_list.selection()}
+        if not excluded:return
+        self._populate_epub_changes([change for index,change in enumerate(self.epub_changes)
+                                     if index not in excluded])
+
+    def _populate_epub_changes(self,changes):
+        self.epub_changes=changes
+        self.epub_changes_list.delete(*self.epub_changes_list.get_children())
+        for index,change in enumerate(changes):
+            after=change.get("after")
+            self.epub_changes_list.insert("","end",iid=str(index),values=(
+                "삭제" if after is None else "수정",
+                (change.get("before") or "")[:120],
+                "(삭제)" if after is None else after[:120]))
+        state="normal" if changes else "disabled"
+        self.epub_save_button.configure(state=state)
+        self.epub_exclude_button.configure(state=state)
+        if changes:
+            self.epub_status.set(f"적용할 변경 {len(changes)}건입니다. 빼고 싶은 항목은 선택해서 제외하세요.")
+
+    def save_edited_epub(self):
+        if not self.epub_changes:return
+        source=Path(self.epub_source.get().strip())
+        target=filedialog.asksaveasfilename(title="수정한 EPUB 저장",defaultextension=".epub",
+            initialfile=f"{source.stem}_수정.epub",filetypes=[("EPUB","*.epub")])
+        if not target:return
+        if Path(target).resolve()==source.resolve():
+            messagebox.showerror("EPUB 편집","원본과 다른 파일 이름을 선택하세요.");return
+        plan=self._epub_plan_path()
+        try:
+            plan.write_text(json.dumps(self.epub_changes,ensure_ascii=False),encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("EPUB 편집",f"저장하지 못했습니다: {exc}");return
+        root,python=self._runtime_python()
+        command=[str(python),"-m","scan2read","edit-epub",str(source.resolve()),
+                 "--apply-plan",str(plan),"--output",str(Path(target).resolve())]
+        try:
+            self.epub_process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+                text=True,encoding="utf-8",errors="replace",env=self._subprocess_env(),
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0)
+        except OSError as exc:
+            messagebox.showerror("EPUB 편집",f"실행하지 못했습니다: {exc}");return
+        self.epub_save_button.configure(state="disabled")
+        self._epub_saving=True
+        self.epub_status.set("수정한 EPUB을 저장하는 중입니다…")
+        threading.Thread(target=self._read_epub_process,args=(self.epub_process,),daemon=True).start()
+
     def _check_gpu_status(self):
         root,python=self._runtime_python()
         env=os.environ.copy();env["PYTHONUTF8"]="1"
@@ -735,14 +892,18 @@ class Application:
         if job["kind"]=="ocr":return (job["file"],"ocr",job["chunk_index"])
         return (job["file"],"finalize")
 
-    def _subprocess_env(self):
+    def _subprocess_env(self,with_api_key=False):
+        """`with_api_key` is for jobs that are inherently AI jobs (EPUB rule
+        editing). A conversion only gets the key when the AI master switch is
+        on, so a worker that shouldn't be calling an API isn't handed the
+        credentials for one."""
         root,_=self._runtime_python()
         env=os.environ.copy();env["PYTHONUTF8"]="1";env["PYTHONUNBUFFERED"]="1"
         env["PYTHONDONTWRITEBYTECODE"]="1"
         env["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"]="True"
         env["PYTHONPATH"]=str(root/"app") if (root/"app").exists() else str(root/"src")
         if (root/"models").exists():env["SCAN2READ_MODELS"]=str(root/"models")
-        if self.use_ai_context.get() and self.api_key.get().strip():
+        if (with_api_key or self.use_ai_context.get()) and self.api_key.get().strip():
             env[_PROVIDER_ENV_VAR[self.ai_provider.get()]]=self.api_key.get().strip()
         if (root/"java"/"bin").exists():env["PATH"]=str(root/"java"/"bin")+os.pathsep+env.get("PATH","")
         return env
@@ -910,10 +1071,47 @@ class Application:
                 else:
                     self.gpu_install_button.configure(state="normal",text="GPU 가속 다운로드 (~2GB)")
                     self.status.set("GPU 가속 설치에 실패했습니다. 아래 로그를 확인하세요.")
+            elif kind=="epub-log":
+                self._handle_epub_log(value)
+            elif kind=="epub-done":
+                self.epub_process=None
+                self.epub_plan_button.configure(state="normal")
+                if value!=0:
+                    self.epub_status.set("실패했습니다. 아래 변환 탭의 로그를 확인하세요.")
+                    self.epub_save_button.configure(state="normal" if self.epub_changes else "disabled")
+                elif self._epub_saving:
+                    self._epub_saving=False
+                else:
+                    self._load_epub_plan()
             elif kind=="done" and self.in_batch:
                 key,code=value
                 self._handle_job_done(key,code)
         if not self._closing:self._poll_timer=self.window.after(150,self.poll)
+
+    def _handle_epub_log(self,line):
+        if line.startswith("SCAN2READ_EPUB_SAVED "):
+            try:saved=json.loads(line.partition(" ")[2])
+            except (ValueError,TypeError):return
+            self.epub_status.set(f"저장했습니다: {saved.get('output','')} (변경 {saved.get('applied',0)}건)")
+            self.last_successful_output=Path(saved.get("output",""))
+            self.open_button.configure(state="normal")
+            return
+        if line.startswith("SCAN2READ_EPUB_PLAN "):
+            try:plan=json.loads(line.partition(" ")[2])
+            except (ValueError,TypeError):return
+            if plan.get("stopped_early"):
+                self.epub_status.set(f"비용 한도에 걸려 일부만 검토했습니다 (문단 {plan.get('blocks',0)}개 중 일부).")
+            return
+        if line.startswith("SCAN2READ_AI_USAGE "):
+            try:self._show_ai_usage(self.epub_source.get(),json.loads(line.partition(" ")[2]))
+            except (ValueError,TypeError):pass
+            return
+        if line.startswith("SCAN2READ_AI_PROGRESS "):
+            try:self._show_ai_progress(json.loads(line.partition(" ")[2]))
+            except (ValueError,TypeError):pass
+            return
+        self.log.configure(state="normal");self.log.insert("end",f"[EPUB 편집] {line}")
+        self.log.see("end");self.log.configure(state="disabled")
 
     def _handle_job_log(self,key,line):
         source,*_=key

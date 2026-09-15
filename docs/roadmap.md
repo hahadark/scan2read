@@ -61,6 +61,8 @@
   (`gui.py`의 `dpi_scale()`).
 - 저장소를 GitHub(현재 공개)에 올리고 사용자용 문서(README/INSTALL.md/WINDOWS.md)를
   분리, 최신 소스 기준 설치 파일을 Release로 배포.
+- "EPUB 편집" 탭(`epub/editor.py`, `cleanup/ai_edit.py`, `edit-epub` 서브커맨드): 이미
+  만들어진 EPUB을 자연어 규칙 하나로 고친다. 제안 → 미리보기 제외 → 새 파일 저장 2단계.
 - "도식·그림 잔재 삭제"(`AIOptions.figures`): 순서도·삽화에서 나온 낱글자/화살표 문단을
   통째로 제거하는 첫 번째 삭제형 기능. AI 판정 + 로컬 `looks_like_figure_residue()` 두
   관문을 모두 통과해야 지운다.
