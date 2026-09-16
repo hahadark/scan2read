@@ -80,18 +80,28 @@ def output_name(source: Path, rule: str, index: int) -> str:
     return name + ".epub"
 
 
+def unique_epub_path(candidate: Path, reserved: set[str] | None = None) -> Path:
+    """`candidate`, or the first free "name (2).epub", "name (3).epub" after it.
+
+    Never returns a path that already exists or is in `reserved`, so no caller
+    can be talked into overwriting a book.
+    """
+    original = candidate
+    number = 2
+    taken = reserved if reserved is not None else set()
+    while str(candidate.resolve()).casefold() in taken or candidate.exists():
+        candidate = original.with_name(f"{original.stem} ({number}).epub")
+        number += 1
+    return candidate
+
+
 def plan_outputs(sources: list[Path], directory: str, rule: str) -> list[Path]:
     """Reserve unique names across the batch and existing files; never overwrite."""
     reserved: set[str] = set()
     outputs = []
     for index, source in enumerate(sources, 1):
         folder = Path(directory).expanduser() if directory.strip() else source.parent
-        candidate = folder / output_name(source, rule, index)
-        original = candidate
-        number = 2
-        while str(candidate.resolve()).casefold() in reserved or candidate.exists():
-            candidate = original.with_name(f"{original.stem} ({number}).epub")
-            number += 1
+        candidate = unique_epub_path(folder / output_name(source, rule, index), reserved)
         reserved.add(str(candidate.resolve()).casefold())
         outputs.append(candidate)
     return outputs

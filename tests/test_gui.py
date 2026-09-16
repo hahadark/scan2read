@@ -201,7 +201,37 @@ class GuiTests(unittest.TestCase):
             first_chunk_key=next(key for key in self.app.active if self.app.active[key]['job']['range'][0]==1)
             self.app.events.put(('log',(first_chunk_key,'Rendering/OCR: 10 / 40\n')))
             self.app.poll()
-        self.assertEqual(self.app.file_list.set('0','state'),'OCR 10/40쪽')
+        self.assertEqual(self.app.file_list.set('0','state'),'OCR 25% (10/40쪽)')
+
+    def test_batch_bar_follows_pages_not_finished_files(self):
+        path=self.add('a.pdf')[0]
+        self.app.page_counts[path]=40
+        with patch('scan2read.gui.subprocess.Popen',return_value=Mock(stdout=iter([]))):
+            self.app.start()
+            self.assertEqual(self.app.progress['value'],0)
+            first_chunk_key=next(key for key in self.app.active if self.app.active[key]['job']['range'][0]==1)
+            self.app.events.put(('log',(first_chunk_key,'Rendering/OCR: 20 / 40\n')))
+            self.app.poll()
+        # Half the pages are done but no file is finished; the old file-count
+        # bar would still read 0 here.
+        self.assertAlmostEqual(self.app.progress['value'],50.0)
+        self.assertIn('50%',self.app.status.get())
+        self.assertIn('20/40쪽',self.app.status.get())
+
+    def test_progress_falls_back_to_file_counts_when_page_counts_are_unknown(self):
+        self.add('a.pdf','b.pdf')  # no page_counts -> no chunk plans
+        with patch('scan2read.gui.subprocess.Popen',return_value=Mock(stdout=iter([]))):
+            self.app.start()
+        self.app.row_states[self.app.queue[0]]='완료'
+        self.app._update_batch_progress()
+        self.assertAlmostEqual(self.app.progress['value'],50.0)
+        self.assertIn('1/2권',self.app.status.get())
+        self.app.active={};self.app.in_batch=False
+
+    def test_duration_text_reads_as_time_not_raw_seconds(self):
+        self.assertEqual(self.app._duration_text(45),'45초')
+        self.assertEqual(self.app._duration_text(125),'2분 5초')
+        self.assertEqual(self.app._duration_text(3725),'1시간 2분')
 
     def test_chunks_and_finalize_share_the_slot_pool_across_files(self):
         paths=self.add('a.pdf','b.pdf')
@@ -323,6 +353,56 @@ class GuiTests(unittest.TestCase):
         self.app._on_drop(Mock(data=str(pdf)))
         self.assertEqual(len(self.app.queue),1)
         self.assertEqual(self.app.epub_source.get(),'')
+
+    def test_selecting_a_source_proposes_a_free_output_path(self):
+        source=Path(self.temp.name)/'book.epub';source.write_bytes(b'x')
+        with patch.object(self.app,'_inspect_epub'):
+            self.app.set_epub_source(source)
+        self.assertEqual(Path(self.app.epub_output.get()).name,'book_수정.epub')
+        self.assertFalse(Path(self.app.epub_output.get()).exists())
+
+    def test_proposed_output_steps_aside_from_an_existing_file(self):
+        source=Path(self.temp.name)/'book.epub';source.write_bytes(b'x')
+        (Path(self.temp.name)/'book_수정.epub').write_bytes(b'x')
+        with patch.object(self.app,'_inspect_epub'):
+            self.app.set_epub_source(source)
+        self.assertEqual(Path(self.app.epub_output.get()).name,'book_수정 (2).epub')
+
+    def test_saving_uses_the_shown_path_without_opening_a_dialog(self):
+        source=Path(self.temp.name)/'book.epub';source.write_bytes(b'x')
+        with patch.object(self.app,'_inspect_epub'):
+            self.app.set_epub_source(source)
+        self.app.epub_changes=[{'document':'EPUB/c.xhtml','index':1,'before':'a','after':None}]
+        with patch('scan2read.gui.filedialog.asksaveasfilename') as dialog, \
+             patch('scan2read.gui.subprocess.Popen',return_value=Mock(stdout=iter([]))) as popen:
+            self.app.save_edited_epub()
+            dialog.assert_not_called()
+            command=popen.call_args.args[0]
+        self.assertEqual(command[command.index('--output')+1],self.app.epub_output.get())
+        self.assertIn('--apply-plan',command)
+        self.app.epub_process=None
+
+    def test_saving_refuses_to_write_over_the_source(self):
+        source=Path(self.temp.name)/'book.epub';source.write_bytes(b'x')
+        with patch.object(self.app,'_inspect_epub'):
+            self.app.set_epub_source(source)
+        self.app.epub_output.set(str(source))
+        self.app.epub_changes=[{'document':'EPUB/c.xhtml','index':1,'before':'a','after':None}]
+        with patch('scan2read.gui.messagebox.showerror') as error, \
+             patch('scan2read.gui.subprocess.Popen') as popen:
+            self.app.save_edited_epub()
+            error.assert_called_once();popen.assert_not_called()
+
+    def test_saving_into_a_missing_folder_reports_it_instead_of_failing_later(self):
+        source=Path(self.temp.name)/'book.epub';source.write_bytes(b'x')
+        with patch.object(self.app,'_inspect_epub'):
+            self.app.set_epub_source(source)
+        self.app.epub_output.set(str(Path(self.temp.name)/'없는폴더'/'out.epub'))
+        self.app.epub_changes=[{'document':'EPUB/c.xhtml','index':1,'before':'a','after':None}]
+        with patch('scan2read.gui.messagebox.showerror') as error, \
+             patch('scan2read.gui.subprocess.Popen') as popen:
+            self.app.save_edited_epub()
+            error.assert_called_once();popen.assert_not_called()
 
     def test_epub_plan_requires_a_file_a_rule_and_a_key(self):
         with patch('scan2read.gui.messagebox.showerror') as error, \
@@ -477,7 +557,8 @@ class GuiTests(unittest.TestCase):
         self.app._show_ai_progress({"stage":"ai_enhance","completed_batches":1,"total_batches":3,
             "elapsed_seconds":2.0,"estimated_remaining_seconds":4.0})
         self.assertIn('1/3',self.app.ai_progress_status.get())
-        self.assertIn('AI 보정',self.app.ai_progress_status.get())
+        self.assertIn('AI 문장 보정',self.app.ai_progress_status.get())
+        self.assertIn('33%',self.app.ai_progress_status.get())
         self.assertIn('4',self.app.ai_progress_status.get())
 
     def test_ai_progress_log_line_is_parsed_and_does_not_reach_the_log_widget(self):

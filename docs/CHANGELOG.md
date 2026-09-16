@@ -15,6 +15,59 @@ picks this project up next. Feature-level usage docs live in
 narrative of *how* things got to their current state, including real-book
 findings and rejected approaches, which those reference docs don't carry.
 
+## 2026-09-16
+
+### A save dialog that refused to save, and progress you can read at a glance
+
+Two reports from real use.
+
+**Saving an edited EPUB failed.** Windows' Save dialog answered
+`부교역자리바이벌_수정.epub 파일이 없습니다. 파일 이름을 확인하고 다시 시도하십시오.`
+-- a *file not found* error from a dialog whose entire purpose is naming a
+file that doesn't exist yet. Rather than keep guessing at which combination
+of `defaultextension` / `filetypes` / `initialfile` provokes that on this
+machine, the dialog was removed from the path that matters:
+
+- Picking a source now immediately proposes a free output path next to it
+  (`<이름>_수정.epub`, stepping aside to `(2)` if taken) and shows it in an
+  editable "저장할 파일" field. Saving uses that path directly -- no dialog.
+- "폴더 바꾸기" asks for a *directory* (`askdirectory`), never a filename,
+  so the failing dialog type is gone entirely rather than merely avoided
+  by default.
+- This also matches how conversion already works: it never asks for a
+  filename either, it derives one from a naming rule.
+- Extracted `unique_epub_path()` from `plan_outputs()` so both paths share
+  one "never overwrite a book" rule, and added guards that report a
+  missing folder or a same-as-source target up front instead of letting
+  the subprocess fail later.
+
+**Progress was hard to read.** The bar was driven by *finished files*, so
+converting one 554-page book showed 0% for the entire run and then jumped
+to 100% -- the single most common case had no progress indication at all.
+
+- The bar and status line now aggregate OCR'd pages across the batch:
+  `OCR 25% · 140/554쪽 · 남은 시간 약 5분 54초`, with `· 1/3권 완료` added
+  only when there is more than one book. Falls back to the old file-count
+  behaviour when any queued file's page count isn't known yet.
+- Rows gained a percentage: `OCR 25% (140/554쪽)`.
+- Once every page is read the status says `문장 정리·EPUB 만드는 중…`
+  rather than `OCR 100%` -- reconstruction, AI cleanup and packaging still
+  have to run, and "100%" there reads as finished when it isn't.
+- AI lines are in plain language with a percentage and a readable
+  duration: `AI 문장 보정 18% (7/40묶음) · 남은 시간 약 3분 5초`, via a
+  shared `_duration_text()` (`45초` / `2분 5초` / `1시간 2분`) instead of
+  raw seconds.
+- Tests: page-based bar with nothing finished, fallback when page counts
+  are unknown, duration formatting, the proposed output path (including
+  stepping aside from an existing file), saving without opening a dialog,
+  and refusals for same-as-source and missing-folder targets. Two existing
+  tests that pinned the old wording were updated. 330 tests total.
+
+Note for whoever works on this next: the editing tools could not write
+anywhere under the project tree during this session (temp-file creation
+was refused), so these edits were applied by running patch scripts from
+the scratchpad with the dev interpreter. PowerShell writes worked fine.
+
 ## 2026-09-15
 
 ### Follow-up: the EPUB tab now shows its own AI state, and takes dropped files

@@ -11,7 +11,7 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
-from scan2read.project.batch import Preferences, plan_outputs
+from scan2read.project.batch import Preferences, plan_outputs, unique_epub_path
 from scan2read.project.credentials import load_api_key, save_api_key
 from scan2read.cleanup.ai_providers import default_model, models_for, resolve_model
 from scan2read.cleanup.ai_usage import FEATURE_LABELS, estimate_book_usage, estimate_epub_edit_usage
@@ -190,6 +190,7 @@ class Application:
         self.ai_usage_status=tk.StringVar(value="실제 사용: 아직 없음")
         self.ai_progress_status=tk.StringVar(value="")
         self.epub_source=tk.StringVar()
+        self.epub_output=tk.StringVar()
         self.epub_status=tk.StringVar(value="EPUB 파일과 규칙을 넣고 '변경 제안 받기'를 누르세요.")
         self.epub_estimate_status=tk.StringVar(value="예상 사용량: EPUB을 선택하면 계산합니다.")
         self.epub_usage_status=tk.StringVar(value="실제 사용: 아직 없음")
@@ -220,6 +221,7 @@ class Application:
         self.cancelling_remaining={}  # file -> its own active jobs not yet finished, while cancelling
         self.batch_total=0
         self.batch_failed=0
+        self.batch_started_at=None
         self.last_successful_output=None
         self.row_states={}
         self.preview_outputs=[]
@@ -379,6 +381,12 @@ class Application:
         entry.pack(side="left",fill="x",expand=True,padx=8);self.edit_controls.append((entry,"normal"))
         ttk.Label(tab_epub,text="예: 각주 번호만 있는 문단은 빼주세요 · 영어 인용문은 통째로 빼주세요 · 장 제목을 '제1장' 형식으로 통일해주세요",
                   foreground="#555",wraplength=self._px(760)).pack(anchor="w")
+        epub_out_row=ttk.Frame(tab_epub);epub_out_row.pack(fill="x",pady=4)
+        ttk.Label(epub_out_row,text="저장할 파일").pack(side="left")
+        entry=ttk.Entry(epub_out_row,textvariable=self.epub_output)
+        entry.pack(side="left",fill="x",expand=True,padx=8);self.edit_controls.append((entry,"normal"))
+        button=ttk.Button(epub_out_row,text="폴더 바꾸기",command=self.choose_epub_output)
+        button.pack(side="left");self.edit_controls.append((button,"normal"))
         epub_actions=ttk.Frame(tab_epub);epub_actions.pack(fill="x",pady=6)
         self.epub_plan_button=ttk.Button(epub_actions,text="변경 제안 받기",command=self.start_epub_plan)
         self.epub_plan_button.pack(side="left")
@@ -681,7 +689,15 @@ class Application:
         if path:self.set_epub_source(path)
 
     def set_epub_source(self,path):
-        self.epub_source.set(str(path))
+        source=Path(path)
+        self.epub_source.set(str(source))
+        # Propose a free filename up front. The common case then never opens a
+        # save dialog -- Windows' Save dialog rejects a not-yet-existing name
+        # in some configurations, which made saving fail outright.
+        try:
+            self.epub_output.set(str(unique_epub_path(source.with_name(f"{source.stem}_수정.epub"))))
+        except OSError:
+            self.epub_output.set(str(source.with_name(f"{source.stem}_수정.epub")))
         self._clear_epub_changes()
         self.epub_stats=None
         self.epub_usage_status.set("실제 사용: 아직 없음")
@@ -791,14 +807,37 @@ class Application:
         if changes:
             self.epub_status.set(f"적용할 변경 {len(changes)}건입니다. 빼고 싶은 항목은 선택해서 제외하세요.")
 
+    def choose_epub_output(self):
+        """Relocate the auto-chosen output. Asks for a folder, not a filename:
+        a save dialog would put us back on the Windows behaviour that refused
+        names which don't exist yet."""
+        current=Path(self.epub_output.get().strip() or self.epub_source.get().strip() or ".")
+        directory=filedialog.askdirectory(title="저장할 폴더 선택",initialdir=str(current.parent))
+        if not directory:return
+        name=current.name if current.suffix.lower()==".epub" else f"{current.stem}_수정.epub"
+        try:
+            self.epub_output.set(str(unique_epub_path(Path(directory)/name)))
+        except OSError:
+            self.epub_output.set(str(Path(directory)/name))
+
     def save_edited_epub(self):
         if not self.epub_changes:return
         source=Path(self.epub_source.get().strip())
-        target=filedialog.asksaveasfilename(title="수정한 EPUB 저장",defaultextension=".epub",
-            initialfile=f"{source.stem}_수정.epub",filetypes=[("EPUB","*.epub")])
-        if not target:return
-        if Path(target).resolve()==source.resolve():
-            messagebox.showerror("EPUB 편집","원본과 다른 파일 이름을 선택하세요.");return
+        raw=self.epub_output.get().strip()
+        if not raw:
+            messagebox.showerror("EPUB 편집","저장할 파일 경로를 입력하세요.");return
+        target=Path(raw)
+        if target.suffix.lower()!=".epub":target=target.with_suffix(".epub")
+        if not target.parent.is_dir():
+            messagebox.showerror("EPUB 편집",f"저장할 폴더가 없습니다: {target.parent}");return
+        try:
+            if target.resolve()==source.resolve():
+                messagebox.showerror("EPUB 편집","원본과 다른 파일 이름을 선택하세요.");return
+            target=unique_epub_path(target)
+        except OSError as exc:
+            messagebox.showerror("EPUB 편집",f"저장 경로를 확인하지 못했습니다: {exc}");return
+        self.epub_output.set(str(target))
+        target=str(target)
         plan=self._epub_plan_path()
         try:
             plan.write_text(json.dumps(self.epub_changes,ensure_ascii=False),encoding="utf-8")
@@ -933,6 +972,7 @@ class Application:
         self.failed_files=set()
         self.cancelling_remaining={}
         self.batch_total=len(self.queue);self.batch_failed=0
+        self.batch_started_at=time.monotonic()
         self.in_batch=True;self.cancelled=False
         self.current_ai_usage={}
         self.ai_progress_status.set("")
@@ -1073,17 +1113,62 @@ class Application:
         index=str(self.queue.index(source))
         self.file_list.set(index,"state",self.row_states[source])
 
-    def _update_row_progress(self,source):
+    @staticmethod
+    def _duration_text(seconds):
+        seconds=int(max(0,seconds))
+        if seconds>=3600:return f"{seconds//3600}시간 {seconds%3600//60}분"
+        if seconds>=60:return f"{seconds//60}분 {seconds%60}초"
+        return f"{seconds}초"
+
+    def _file_page_progress(self,source):
+        """(done, total) OCR pages for one file, or None if its size is unknown."""
         chunks=self.chunk_plans.get(source)
-        if not chunks:return
+        if not chunks:return None
         total=sum(b-a+1 for a,b in chunks)
+        if self.row_states.get(source)=="완료":return (total,total)
         progress=self.chunk_progress.get(source,{})
         done=sum(min(progress[i],b)-a+1 for i,(a,b) in enumerate(chunks) if i in progress)
-        self.row_states[source]=f"OCR {done}/{total}쪽"
+        return (min(done,total),total)
+
+    def _update_row_progress(self,source):
+        counts=self._file_page_progress(source)
+        if counts is None:return
+        done,total=counts
+        percent=done/total*100 if total else 0
+        self.row_states[source]=f"OCR {percent:.0f}% ({done}/{total}쪽)"
         self._update_state(source)
-        completed_files=sum(1 for state in self.row_states.values() if state=="완료")
-        if self.batch_total:
-            self.progress["value"]=completed_files/self.batch_total*100
+        self._update_batch_progress()
+
+    def _update_batch_progress(self):
+        """Drive the bar and status line from pages actually OCR'd, not from
+        how many files happen to be finished -- with one big book in the queue
+        the old file-count bar sat at 0% for the entire run."""
+        completed=sum(1 for state in self.row_states.values() if state=="완료")
+        counts=[self._file_page_progress(source) for source in self.queue]
+        if counts and all(count is not None for count in counts):
+            done=sum(count[0] for count in counts)
+            total=sum(count[1] for count in counts)
+        else:
+            done=total=0
+        if total:
+            percent=done/total*100
+            self.progress["value"]=percent
+            eta=""
+            if self.batch_started_at is not None and done:
+                elapsed=time.monotonic()-self.batch_started_at
+                if total>done and elapsed>5:
+                    eta=f" · 남은 시간 약 {self._duration_text(elapsed/done*(total-done))}"
+            book=f" · {completed}/{self.batch_total}권 완료" if self.batch_total>1 else ""
+            if done>=total and completed<self.batch_total:
+                # Pages are all read; what is left is reconstruction, optional
+                # AI cleanup and packaging -- saying "OCR 100%" here reads as
+                # "finished" when there is still a slow phase to go.
+                self.status.set(f"OCR 완료 · 문장 정리·EPUB 만드는 중…{book}")
+            else:
+                self.status.set(f"OCR {percent:.0f}% · {done:,}/{total:,}쪽{book}{eta}")
+        elif self.batch_total:
+            self.progress["value"]=completed/self.batch_total*100
+            self.status.set(f"{completed}/{self.batch_total}권 완료")
 
     def poll(self):
         while not self.events.empty():
@@ -1214,10 +1299,7 @@ class Application:
                 n,_total=map(int,match.groups())
                 self.chunk_progress.setdefault(source,{})[entry["job"]["chunk_index"]]=n
                 self._update_row_progress(source)
-        if len(self.queue)==1 and not self.batch_failed:
-            total=self.batch_total or 1
-            done=sum(1 for state in self.row_states.values() if state=="완료")
-            self.status.set(f"[{done}/{total}] {Path(source).name} 변환 중…")
+
 
     def _handle_job_done(self,key,code):
         entry=self.active.pop(key,None)
@@ -1243,7 +1325,7 @@ class Application:
         self._update_row_progress(source)
         self.pending_chunk_count[source]-=1
         if self.pending_chunk_count[source]<=0:
-            self.row_states[source]="OCR 완료 · EPUB 조립 중…"
+            self.row_states[source]="문장 정리·EPUB 만드는 중…"
             self._update_state(source)
             self.job_queue.insert(0,{"kind":"finalize","file":source,"output":self.file_outputs[source]})
 
@@ -1256,6 +1338,7 @@ class Application:
         else:
             self._fail_file(source)
         self._update_state(source)
+        self._update_batch_progress()
 
     def _file_job_finished_while_cancelled(self,source):
         self.cancelling_remaining[source]-=1
@@ -1280,9 +1363,10 @@ class Application:
 
     def _show_epub_progress(self,snapshot):
         completed=snapshot.get("completed_batches",0);total=snapshot.get("total_batches",0)
+        if not total:return
         remaining=snapshot.get("estimated_remaining_seconds")
-        tail=f" · 예상 남은 시간 {int(remaining)}초" if isinstance(remaining,(int,float)) else ""
-        self.epub_status.set(f"검토 중… 묶음 {completed}/{total}{tail}")
+        tail=f" · 남은 시간 약 {self._duration_text(remaining)}" if isinstance(remaining,(int,float)) else ""
+        self.epub_status.set(f"AI 검토 {completed/total*100:.0f}% ({completed}/{total}묶음){tail}")
 
     def _show_ai_usage(self,source,snapshot):
         self.current_ai_usage[source]=snapshot
@@ -1308,13 +1392,14 @@ class Application:
             f"{state}{detail}")
 
     def _show_ai_progress(self,snapshot):
-        stage={"ai_context":"문단 경계 검사","ai_enhance":"AI 보정"}.get(snapshot.get("stage"),"AI 검수")
+        stage={"ai_context":"AI 문단 경계 검사","ai_enhance":"AI 문장 보정"}.get(snapshot.get("stage"),"AI 검수")
         completed=snapshot.get("completed_batches",0);total=snapshot.get("total_batches",0)
         if total==0:
             self.ai_progress_status.set("");return
         remaining=snapshot.get("estimated_remaining_seconds")
-        eta=f" · 예상 남은 시간 {remaining:.0f}초" if remaining is not None else ""
-        self.ai_progress_status.set(f"{stage} 진행률: {completed}/{total} 묶음{eta}")
+        eta=f" · 남은 시간 약 {self._duration_text(remaining)}" if remaining is not None else ""
+        percent=completed/total*100
+        self.ai_progress_status.set(f"{stage} {percent:.0f}% ({completed}/{total}묶음){eta}")
 
     def stop(self):
         if not self.active:return
